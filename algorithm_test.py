@@ -11,7 +11,7 @@ from tqdm import tqdm
 from adv_matrix import AdvPerturbation, _nextafter
 from simulated_annealing import SimulatedAnnealingSearch
 from evol_algorithms import AdversarialGeneticAlgorithm
-from utils import save_dict_to_pickle #plot_max, annealing_plot, track_evol_, pad_to_match
+from utils.utils import save_dict_to_pickle #plot_max, annealing_plot, track_evol_, pad_to_match
 
 _model    = sys.argv[1]
 _data     = sys.argv[2]
