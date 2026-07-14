@@ -1,7 +1,22 @@
 import torch
+import hashlib
 import pickle
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+
+
+def hash_tensor(*tensors: torch.Tensor):
+    h = hashlib.sha256()
+    cpu = torch.device("cpu")
+    for t in tensors:
+        if t.device != cpu:
+            t = t.cpu()
+
+        if t.dtype == torch.bfloat16:
+            h.update(t.float().detach().numpy().tobytes())
+        else:
+            h.update(t.detach().numpy().tobytes())
+    return h.digest()
 
 
 def save_dict_to_pickle(data_dict: dict, filename):
