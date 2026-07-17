@@ -1,10 +1,13 @@
 import torch
+import copy
 import functools
 import matplotlib.pyplot as plt
 import numpy as np
+import torch.nn as nn
 
 from tqdm import tqdm
 from torch.linalg import vector_norm, multi_dot
+from utils.utils import product_err, plot_max
 
 
 class CallTracker:
@@ -100,49 +103,141 @@ def nextafter(x: torch.Tensor, offset: torch.Tensor):
 
 class AdvPerturbation:
 
-    def __init__(self, input_matrix: torch.Tensor, weights, p, 
-                 max_iter = 256):
+    def __init__(self, input_matrix: torch.Tensor, func, p, 
+                 max_calls = 256):
 
         self.input_matrix = input_matrix
 
-        if isinstance(weights, torch.Tensor):
-            weights = [weights]
-
-        # Dimension check using consecutive pairs
-        _matrices = [input_matrix] + weights
-        for a, b in zip(_matrices, _matrices[1:]):
-            if a.shape[-1] != b.shape[-2]:
+        if isinstance(func, torch.Tensor):
+            self.tensor_prod = True
+            # Dimension check using consecutive pairs
+            # _matrices = [input_matrix] + func
+            # for a, b in zip(_matrices, _matrices[1:]):
+            if input_matrix.shape[-1] != func.shape[-2]:
                 raise ValueError(
-                    f"Shape mismatch: {tuple(a.shape)} vs {tuple(b.shape)} — "
-                    f"dim {a.shape[-1]} != {b.shape[-2]}"
-                )
+                    f"Shape mismatch: {tuple(input_matrix.shape)} vs {tuple(func.shape)} — "
+                    f"dim {input_matrix.shape[-1]} != {func.shape[-2]}"
+                    )
+            self.weights     = [func]
+            self.nn          = None
+            print("RUNNING W TENSOR MULTIPLICATION")
+        elif isinstance(func, nn.Module):
+            self.tensor_prod = False
+            try:
+                with torch.no_grad():
+                    func.eval()
+                    func(input_matrix)
+            except Exception as e:
+                raise ValueError(f"Input tensor is not a valid input for func: {e}")
+            self.weights     = None
+            self.nn          = func#.eval()
+            self.tensor_prod = False
+            print("RUNNING W CALLABLE TORCH MODULE")
+            
+        else:
+            raise TypeError(f"Received a {type(func)} as func: must be either torch.Tensor or nn.Module.")
+                        
+        # # Dimension check using consecutive pairs
+        # _matrices = [input_matrix] + weights
+        # for a, b in zip(_matrices, _matrices[1:]):
+        #     if a.shape[-1] != b.shape[-2]:
+        #         raise ValueError(
+        #             f"Shape mismatch: {tuple(a.shape)} vs {tuple(b.shape)} — "
+        #             f"dim {a.shape[-1]} != {b.shape[-2]}"
+        #         )
 
-        self.weights     = weights
-        self.weights_gpu = [m.to("cuda") for m in self.weights]
+        self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
+        self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
 
-        self.n_input  = input_matrix.shape[0]
-        self.n_latent = input_matrix.shape[1]
+        self.p  = p
+        self._p = int(p*input_matrix.numel())
 
-        self.p             = p
-        self.max_iter      = max_iter
-        self.max_ulp_calls = p*max_iter
+        if self.tensor_prod: # Input is a matrix
+            self.channels = 0
+            self.n_input  = input_matrix.shape[0]
+            self.n_latent = input_matrix.shape[1]
+        else: # Input is "image-like": (1, C, H, W)
+            self.channels = input_matrix.shape[1]
+            self.n_input  = input_matrix.shape[2] # Height
+            self.n_latent = input_matrix.shape[3] # Width
+        
+        self.max_calls    = max_calls
+        self.total_calls = self._p*max_calls
+    
+    def flat_to_3d(self, idx):
+        aux_idx = idx % (self.n_latent**2)
+        c = idx // (self.n_latent**2)
+        h = aux_idx // self.n_latent
+        w = aux_idx % self.n_latent
+        return c, h, w
 
-    def _sample_entries(self):
-        flat_idx = torch.randperm(self.input_matrix.numel())[:self.p]
-        return (flat_idx // self.n_latent, flat_idx % self.n_latent)
+
+    def _sample_entries(self, num_samples=-1):
+
+        if num_samples<1:
+            num_samples = self._p
+        
+        flat_idx = torch.randint(self.input_matrix.numel(), 
+                                (num_samples,)
+                                )
+
+        if not self.tensor_prod:
+            indices = self.flat_to_3d(flat_idx)
+            return (torch.zeros(num_samples, dtype=int),
+                        *indices)
+        else:
+            return (flat_idx // self.n_latent, flat_idx % self.n_latent)
+
+    
+    # def multi_dot_err(self, mat_cpu, mat_gpu):
+    #     """
+    #     Used to calculate the error for matrix multiplication:
+    #     mat_cpu: list of matrices in CPU device
+    #     mat_gpu: list of matrices hosted in GPU
+    #     """
+    #     y_cpu  = multi_dot(mat_cpu)
+    #     y_gpu  = multi_dot(mat_gpu)
+    #     y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
+
+    #     if len(y_diff.shape) > 0:
+    #         _y = vector_norm(y_diff, ord=np.inf).item()
+    #     else:
+    #         _y = y_diff.item()
+
+    #     return _y
+    
+    def model_err(self, x_cpu, x_gpu):
+        """
+        Used to calculate the error for forward pass multiplication:
+        mat_cpu: list of matrices in CPU device
+        mat_gpu: list of matrices hosted in GPU
+        """
+        with torch.no_grad():
+            y_cpu  = self.nn(x_cpu)
+            y_gpu  = self.nn_gpu(x_gpu)
+        
+        y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
+
+        if len(y_diff.shape) > 0:
+            _y = vector_norm(y_diff, ord=np.inf).item()
+        else:
+            _y = y_diff.item()
+
+        return _y
+
 
     def random_perturbation(self, step=1, verbose =False):
 
-        M_       = self.input_matrix.clone()
-        M_gpu    = M_.to("cuda")
-        mat_cpu  = [None] + self.weights
-        mat_gpu  = [None] + self.weights_gpu
+        X_    = self.input_matrix.clone()
+        X_gpu = X_.to("cuda")
 
-        abs_err   = -1
-        # max_error = 0
-        flat_len  = self.n_input*self.n_latent
-        n_iter    = self.p*self.max_iter//step
-        infty     = torch.tensor(torch.inf)
+        if self.tensor_prod:
+            mat_cpu  = [None] + self.weights
+            mat_gpu  = [None] + self.weights_gpu
+        
+        abs_err = -1
+        n_iter  = self.total_calls//(step*self._p)
+        infty   = torch.tensor(torch.inf)
 
         y = np.zeros(n_iter)
         perturbation_dict = dict()
@@ -151,16 +246,18 @@ class AdvPerturbation:
 
         for i in iterator:
 
-            flat_idx = np.random.choice(flat_len)
-            idx = (flat_idx // self.n_latent, flat_idx % self.n_latent)
-
+            idx = self._sample_entries()
+           
             if idx in perturbation_dict:
-                perturbation_dict[idx] += 1
+                if perturbation_dict[idx] >= self.max_calls:
+                    continue
+                else:
+                    perturbation_dict[idx] += step     
             else:
-                perturbation_dict.update({idx: 1})
+                perturbation_dict.update({idx: step})
 
             # idx = self._sample_entries()
-            # for i in range(self.p):
+            # for i in range(self._p):
             #     j = (idx[0][i].item(), idx[1][i].item())
             #     if j in perturbation_dict:
             #         perturbation_dict[j] += step
@@ -169,70 +266,72 @@ class AdvPerturbation:
  
             if step > 1:
                 for _ in range(step):
-                    M_[idx] = _nextafter(M_[idx], infty)
+                    X_[idx] = _nextafter(X_[idx], infty)
             else:
-                M_[idx] = _nextafter(M_[idx], infty)
+                X_[idx] = _nextafter(X_[idx], infty)
 
-            M_gpu.copy_(M_, non_blocking=True)
+            X_gpu.copy_(X_, non_blocking=True)
 
-            mat_cpu[0] = M_
-            mat_gpu[0] = M_gpu
+            if self.tensor_prod:
+                mat_cpu[0] = X_
+                mat_gpu[0] = X_gpu
 
-            y_cpu  = multi_dot(mat_cpu)
-            y_gpu  = multi_dot(mat_gpu)
-            y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
-
-            if len(y_diff.shape) > 0:
-                _y = vector_norm(y_diff, ord=np.inf).item()
+            if not self.tensor_prod:
+                _y = self.model_err(X_, X_gpu)
             else:
-                _y = y_diff.item()
+                _y = product_err(mat_cpu, mat_gpu)
 
             y[i] = _y
 
             if abs(_y) > abs_err:
                 abs_err  = abs(_y)
                 max_pert = perturbation_dict.copy()
-                # max_error    = y_
-
+                
         return torch.Tensor(y).unsqueeze(0), max_pert
     
 
     def compute_max_err(self, indices):
 
-        M_    = self.input_matrix.clone()
-        M_gpu = M_.to("cuda")
+        X_    = self.input_matrix.clone()
+        X_gpu = X_.to("cuda")
         infty = torch.tensor(torch.inf)
 
-        mat_cpu = [None] + self.weights
-        mat_gpu = [None] + self.weights_gpu
-
+        if self.tensor_prod:
+            mat_cpu  = [None] + self.weights
+            mat_gpu  = [None] + self.weights_gpu
+        
         abs_err      = 0
         max_error    = 0
         calls_to_max = 1
 
-        for i in range(self.max_iter):
+        for i in range(self.max_calls):
 
             # M_[indices] = nextafter(M_[indices], 1)
             # torch wrapped in counter
-            M_[indices] = _nextafter(M_[indices], infty)
+            X_[indices] = _nextafter(X_[indices], infty)
 
-            M_gpu.copy_(M_, non_blocking=True)
+            X_gpu.copy_(X_, non_blocking=True)
 
-            mat_cpu[0] = M_
-            mat_gpu[0] = M_gpu
+            if self.tensor_prod:
+                mat_cpu[0] = X_
+                mat_gpu[0] = X_gpu
 
-            y_cpu  = multi_dot(mat_cpu)
-            y_gpu  = multi_dot(mat_gpu)
-            y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
-
-            if len(y_diff.shape) > 0:
-                y_ = vector_norm(y_diff, ord=np.inf).item()
+            if not self.tensor_prod:
+                _err = self.model_err(X_, X_gpu)
             else:
-                y_ = y_diff.item()
+                _err = product_err(mat_cpu, mat_gpu)
 
-            if abs(y_) > abs_err:
+            if abs(_err) > abs_err:
                 calls_to_max = i+1
-                abs_err      = abs(y_)
-                max_error    = y_
+                abs_err      = abs(_err)
+                max_error    = _err
 
         return calls_to_max, max_error
+    
+    def plot_max(self, y, y_hist, fname=None, show_zero=False):
+        plot_max(y, y_hist, 
+                 labels=['random'],
+                 n_latent=self.n_input*self.n_latent,
+                 p= self.p,
+                 fname=fname,
+                 show_zero=show_zero)

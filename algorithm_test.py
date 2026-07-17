@@ -39,8 +39,8 @@ M        = _entries*torch.randn(N_INPUT, n_latent, dtype=dtype)
 weights  = W
 
 p = 150
-MAX_ITER = 256
-print(f"MAX ULP CALLS = {p*MAX_ITER}")
+max_calls = 256
+print(f"MAX ULP CALLS = {p*max_calls}")
 
 results      = {}
 alg_calls    = {}
@@ -51,7 +51,7 @@ max_trackers = {}
 ##############################
 sim_anneal =  SimulatedAnnealingSearch(M, weights,
                                        p,
-                                       max_iter=MAX_ITER)
+                                       max_calls=max_calls)
 # Optimization params
 L = 5
 c = 1e-6
@@ -98,7 +98,7 @@ for pop_ in pop_sizes:
     for _ in tqdm(range(N_samples)):
 
         gen_algorithm = AdversarialGeneticAlgorithm(M, weights, p,
-                                            max_iter=MAX_ITER,
+                                            max_calls=max_calls,
                                             pop_size=pop_,
                                             mating_pct=mating_pct
                                             )
@@ -126,7 +126,7 @@ _calls           = []
 y_hist           = torch.Tensor([])
 
 print(f"Running {key_str}")
-benchmark = AdvPerturbation(M, weights, p, max_iter=MAX_ITER)
+benchmark = AdvPerturbation(M, weights, p, max_calls=max_calls)
 for _ in tqdm(range(N_samples)):
 
     _nextafter.reset()

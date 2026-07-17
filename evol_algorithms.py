@@ -15,12 +15,12 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 input_matrix,
                 weights,
                 p,
-                max_iter = 256,
+                max_calls = 256,
                 n_generations = 10, 
                 pop_size=50, 
                 mating_pct=0.2):
 
-        super().__init__(input_matrix, weights, p, max_iter)
+        super().__init__(input_matrix, weights, p, max_calls)
 
         self.n_generations = n_generations
         self.pop_size      = pop_size
@@ -37,7 +37,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             self.init_population()
 
     # def __init__(self, input_matrix, weights, p,
-    #              max_iter = 1024,
+    #              max_calls = 1024,
     #              n_generations = 10, pop_size=50, mating_pop=10):
 
     #     self.input_matrix = input_matrix
@@ -61,7 +61,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     #     self.n_latent   = input_matrix.shape[1]
 
     #     self.p          = p
-    #     self.max_iter   = max_iter
+    #     self.max_calls   = max_calls
     #     self.n_gens     = n_generations
     #     self.pop_size   = pop_size
     #     self.mating_pop = mating_pop
@@ -119,7 +119,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         max_error    = 0
         calls_to_max = 1
 
-        for i in range(self.max_iter):
+        for i in range(self.max_calls):
 
             # M_[indices] = nextafter(M_[indices], 1)
             # torch wrapped in counter

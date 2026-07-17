@@ -11,9 +11,9 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                  input_matrix: torch.Tensor,
                  weights,
                  p,
-                 max_iter = 256):
+                 max_calls = 256):
 
-        super().__init__(input_matrix, weights, p, max_iter)
+        super().__init__(input_matrix, weights, p, max_calls)
 
     def index_to_binary_string(self, rows, cols):
         m = self.n_input

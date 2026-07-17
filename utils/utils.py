@@ -1,8 +1,11 @@
 import torch
 import hashlib
 import pickle
+import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+
+from torch.linalg import vector_norm, multi_dot
 
 
 def hash_tensor(*tensors: torch.Tensor):
@@ -27,15 +30,14 @@ def save_dict_to_pickle(data_dict: dict, filename):
     print(f"--- Saved results in {filename}")
 
 
-def plot_max(Y_max, Y_hist, labels, n_latent, p, fname, show_zero=True):
+def plot_max(Y_max, Y_hist, labels, n_latent, p, fname=None, show_zero=True):
 
     if Y_max.dim()>2:
         raise ValueError(f"Expected 2D tensor, got shape {Y_hist.shape}")
 
     Y_hist = Y_hist.squeeze().ravel()
 
-    fname = "algorithm_perf" + fname + f"_{p}.png"
-
+    
     X    = range(Y_max.shape[1])
     Y_np = Y_max.numpy()
 
@@ -50,16 +52,21 @@ def plot_max(Y_max, Y_hist, labels, n_latent, p, fname, show_zero=True):
         line.set_label(name)
     ax1.legend()
 
-    n_values = Y_hist.unique().numel()
+    n_values  = Y_hist.unique().numel()
+    Y_hist_np = Y_hist.numpy()
+    n_bins    = min(50, max(10, int(np.sqrt(Y_hist_np.size))))  # Sturges/sqrt-style heuristic
 
+    _weights = np.ones_like(Y_hist_np) / Y_hist_np.size # Corrects issues w bin width/density integration
     ax2.set_title(f"Error distribution \n {n_values} unique values")
-    ax2.hist(Y_hist.ravel(), density=True, bins=n_values, orientation = "horizontal")
+    ax2.hist(Y_hist_np, weights=_weights, bins=n_bins, orientation = "horizontal")
 
     if show_zero:
         ax1.axhline(y=0, linestyle = "--", color = "grey")
         ax2.axhline(y=0, linestyle = "--", color = "grey")
 
-    plt.savefig(fname)
+    if fname is not None:
+        fname = "algorithm_perf" + fname + f"_{p}.png"
+        plt.savefig(fname)
 
 def annealing_plot(y, y_max, opt_params, n_latent, p, fname):
 
@@ -97,3 +104,21 @@ def pad_to_match(tensors):
     max_len = max(t.size(1) for t in tensors)
     padded_list = [F.pad(t, (0, max_len - t.size(1)), mode='replicate') for t in tensors]
     return torch.cat(padded_list, dim=0)
+
+
+def product_err(mat_cpu, mat_gpu):
+    """
+    Used to calculate the error for matrix multiplication:
+    mat_cpu: list of matrices in CPU device
+    mat_gpu: list of matrices hosted in GPU
+    """
+    y_cpu  = multi_dot(mat_cpu)
+    y_gpu  = multi_dot(mat_gpu)
+    y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
+
+    if len(y_diff.shape) > 0:
+        _y = vector_norm(y_diff, ord=np.inf).item()
+    else:
+        _y = y_diff.item()
+
+    return _y
