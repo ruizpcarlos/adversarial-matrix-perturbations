@@ -76,7 +76,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def init_population(self):
 
-        first_gen = [self._sample_entries() for _ in range(self.pop_size)]
+        first_gen = [self._sample_entries(self._p) for _ in range(self.pop_size)]
         gen_error = [self.compute_max_err(idx) for idx in first_gen]
 
         #
@@ -102,67 +102,99 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.population[gen] = list(current_gen)
         self.fitness[gen]    = list(gen_fitness)
 
-    def compute_max_err(self, indices):
+    # def compute_max_err(self, indices):
 
-        # def chain_matmul(m, w):
-        #     return reduce(torch.matmul, w, m)
+    #     # def chain_matmul(m, w):
+    #     #     return reduce(torch.matmul, w, m)
 
-        M_    = self.input_matrix.clone()
-        M_gpu = M_.to("cuda")
-        infty = torch.tensor(torch.inf)
+    #     M_    = self.input_matrix.clone()
+    #     M_gpu = M_.to("cuda")
+    #     infty = torch.tensor(torch.inf)
 
-        # weights_cpu = self.weights
-        mat_cpu     = [None] + self.weights
-        mat_gpu     = [None] + self.weights_gpu
+    #     # weights_cpu = self.weights
+    #     mat_cpu     = [None] + self.weights
+    #     mat_gpu     = [None] + self.weights_gpu
 
-        abs_err      = 0
-        max_error    = 0
-        calls_to_max = 1
+    #     abs_err      = 0
+    #     max_error    = 0
+    #     calls_to_max = 1
 
-        for i in range(self.max_calls):
+    #     for i in range(self.max_calls):
 
-            # M_[indices] = nextafter(M_[indices], 1)
-            # torch wrapped in counter
-            M_[indices] = _nextafter(M_[indices], infty)
+    #         # M_[indices] = nextafter(M_[indices], 1)
+    #         # torch wrapped in counter
+    #         M_[indices] = _nextafter(M_[indices], infty)
 
-            M_gpu.copy_(M_, non_blocking=True)
+    #         M_gpu.copy_(M_, non_blocking=True)
 
-            mat_cpu[0] = M_
-            mat_gpu[0] = M_gpu
+    #         mat_cpu[0] = M_
+    #         mat_gpu[0] = M_gpu
 
-            y_cpu  = multi_dot(mat_cpu)
-            y_gpu  = multi_dot(mat_gpu)
-            y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
+    #         y_cpu  = multi_dot(mat_cpu)
+    #         y_gpu  = multi_dot(mat_gpu)
+    #         y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
 
-            if len(y_diff.shape) > 0:
-                y_ = vector_norm(y_diff, ord=np.inf).item()
-            else:
-                y_ = y_diff.item()
+    #         if len(y_diff.shape) > 0:
+    #             y_ = vector_norm(y_diff, ord=np.inf).item()
+    #         else:
+    #             y_ = y_diff.item()
 
-            if abs(y_) > abs_err:
-                calls_to_max = i+1
-                abs_err      = abs(y_)
-                max_error    = y_
+    #         if abs(y_) > abs_err:
+    #             calls_to_max = i+1
+    #             abs_err      = abs(y_)
+    #             max_error    = y_
 
-        return calls_to_max, max_error
+    #     return calls_to_max, max_error
 
     ################################
     ###    MUTATION FUNCTIONS    ###
     ################################
-    def index_to_binary_string(self, rows, cols):
-        m = self.n_input
-        n = self.n_latent
+    # @staticmethod
+    # def _strides(shape):
+    #     strides = [1] * len(shape)
+    #     for i in range(len(shape) - 2, -1, -1):
+    #         strides[i] = strides[i + 1] * shape[i + 1]
+    #     return strides
 
-        flat = rows * n + cols          # row-major flat indices
-        bits = torch.zeros(m * n, dtype=torch.int)
-        bits[flat] = 1
+    # def index_to_binary_string(self, *indices):
+    #     strides = self._strides(self.input_shape)
+    #     flat = torch.zeros_like(indices[0])
+    #     for idx, stride in zip(indices, strides):
+    #         flat = flat + idx * stride
 
-        return ''.join(bits.numpy().astype(str))
+    #     total = 1
+    #     for d in self.input_shape:
+    #         total *= d
 
-    def binary_string_to_index(self, s):
-        n = self.n_input
-        flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
-        return flat % n, flat // n
+    #     bits = torch.zeros(total, dtype=torch.int)
+    #     bits[flat] = 1
+    #     return ''.join(bits.numpy().astype(str))
+    
+    # def binary_string_to_index(self, s):
+    #     strides = self._strides(self.input_shape)
+    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
+
+    #     indices = []
+    #     remainder = flat.clone()
+    #     for stride in strides:
+    #         indices.append(remainder // stride)
+    #         remainder = remainder % stride
+    #     return tuple(indices)
+    
+    # def index_to_binary_string(self, rows, cols):
+    #     m = self.n_input
+    #     n = self.n_latent
+
+    #     flat = rows * n + cols          # row-major flat indices
+    #     bits = torch.zeros(m * n, dtype=torch.int)
+    #     bits[flat] = 1
+
+    #     return ''.join(bits.numpy().astype(str))
+
+    # def binary_string_to_index(self, s):
+    #     n = self.n_input
+    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
+    #     return flat % n, flat // n
 
     def crossover_uniform(self, s1, s2):
 
@@ -181,17 +213,17 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         return ''.join(s1), ''.join(s2)
 
-    def mutate_binary_string(self, s, n_mutations=1):
-        s = list(s)
-        ones  = [i for i, b in enumerate(s) if b == '1']
-        zeros = [i for i, b in enumerate(s) if b == '0']
+    # def mutate_binary_string(self, s, n_mutations=1):
+    #     s = list(s)
+    #     ones  = [i for i, b in enumerate(s) if b == '1']
+    #     zeros = [i for i, b in enumerate(s) if b == '0']
 
-        to_clear = random.sample(ones,  n_mutations)
-        to_set   = random.sample(zeros, n_mutations)
+    #     to_clear = random.sample(ones,  n_mutations)
+    #     to_set   = random.sample(zeros, n_mutations)
 
-        for i in to_clear: s[i] = '0'
-        for i in to_set:   s[i] = '1'
-        return ''.join(s)
+    #     for i in to_clear: s[i] = '0'
+    #     for i in to_set:   s[i] = '1'
+    #     return ''.join(s)
 
     def recombine(self, s1, s2):
 
@@ -270,23 +302,28 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.init_population()
 
         if verbose:
+            aux = self.fitness[0][0]
             print(f"Initialized 1st generation -- ",
-                  f"max error = {self.fitness[-1][0][1]:.3f}, ",
-                  f"ulp calls = {self.fitness[-1][0][0]}")
+                  f"max error = {aux[1]:.3e}, ",
+                  f"ulp calls = {aux[0]}")
 
         if print_plots:
             self.generation_plot()
 
-        counter   = 0
-        j = 1
+        counter = 0
+        j       = 1
+        pop_set = len(set(self.fitness[-1]))
 
-        while _nextafter.call_count < self.max_ulp_calls and counter < 7:
+        while (_nextafter.call_count < self.total_calls and j <=self.n_generations
+               and counter < 7 and pop_set > 1):
 
             start_t = time.time()
             self.evolve_generation()
             total_t = time.time()-start_t
-            n_calls, err = self.fitness[-1][0]
+
+            n_calls, err         = self.fitness[-1][0]
             prev_calls, prev_err = self.fitness[-2][0]
+            pop_set              = len(set(self.fitness[-1]))
 
             if early_stopping: # If early_stopping is False, the counter never grows
                 counter = 0 if (err > prev_err or n_calls < prev_calls) else counter+1
@@ -297,6 +334,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 # print(_nextafter.call_count)
             if print_plots:
                 self.generation_plot()
+
             
             j+=1
 

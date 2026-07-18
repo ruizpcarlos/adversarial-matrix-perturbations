@@ -56,9 +56,9 @@ def plot_max(Y_max, Y_hist, labels, n_latent, p, fname=None, show_zero=True):
     Y_hist_np = Y_hist.numpy()
     n_bins    = min(50, max(10, int(np.sqrt(Y_hist_np.size))))  # Sturges/sqrt-style heuristic
 
-    _weights = np.ones_like(Y_hist_np) / Y_hist_np.size # Corrects issues w bin width/density integration
+    # _weights = np.ones_like(Y_hist_np) / Y_hist_np.size # Corrects issues w bin width/density integration
     ax2.set_title(f"Error distribution \n {n_values} unique values")
-    ax2.hist(Y_hist_np, weights=_weights, bins=n_bins, orientation = "horizontal")
+    ax2.hist(Y_hist_np, density=False, bins=n_bins, orientation = "horizontal")
 
     if show_zero:
         ax1.axhline(y=0, linestyle = "--", color = "grey")

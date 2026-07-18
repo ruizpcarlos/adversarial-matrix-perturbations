@@ -15,32 +15,32 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
         super().__init__(input_matrix, weights, p, max_calls)
 
-    def index_to_binary_string(self, rows, cols):
-        m = self.n_input
-        n = self.n_latent
+    # def index_to_binary_string(self, rows, cols):
+    #     m = self.n_input
+    #     n = self.n_latent
 
-        flat = rows * n + cols          # row-major flat indices
-        bits = torch.zeros(m * n, dtype=torch.int)
-        bits[flat] = 1
+    #     flat = rows * n + cols          # row-major flat indices
+    #     bits = torch.zeros(m * n, dtype=torch.int)
+    #     bits[flat] = 1
 
-        return ''.join(bits.numpy().astype(str))
+    #     return ''.join(bits.numpy().astype(str))
 
-    def binary_string_to_index(self, s):
-        n = self.n_input
-        flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
-        return flat % n, flat // n
+    # def binary_string_to_index(self, s):
+    #     n = self.n_input
+    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
+    #     return flat % n, flat // n
 
-    def mutate_binary_string(self, s, n_mutations=1):
-        s = list(s)
-        ones  = [i for i, b in enumerate(s) if b == '1']
-        zeros = [i for i, b in enumerate(s) if b == '0']
+    # def mutate_binary_string(self, s, n_mutations=1):
+    #     s = list(s)
+    #     ones  = [i for i, b in enumerate(s) if b == '1']
+    #     zeros = [i for i, b in enumerate(s) if b == '0']
 
-        to_clear = random.sample(ones,  n_mutations)
-        to_set   = random.sample(zeros, n_mutations)
+    #     to_clear = random.sample(ones,  n_mutations)
+    #     to_set   = random.sample(zeros, n_mutations)
 
-        for i in to_clear: s[i] = '0'
-        for i in to_set:   s[i] = '1'
-        return ''.join(s)
+    #     for i in to_clear: s[i] = '0'
+    #     for i in to_set:   s[i] = '1'
+    #     return ''.join(s)
 
     def recombine(self, s1):
 
@@ -53,7 +53,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
     def generate_new_sol(self, index):
 
         x_str = self.index_to_binary_string(*index)
-        # x1 = self.recombine(x_str)
+        x1 = self.recombine(x_str)
         x1 = self.mutate_binary_string(x_str)
 
         return self.binary_string_to_index(x1)
@@ -68,7 +68,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         _nextafter.reset()
         self.ulp_calls = [0]
 
-        iter_idx  = self._sample_entries()
+        iter_idx  = self._sample_entries(1)
         iter_calls, iter_err = self.compute_max_err(iter_idx)
 
         Y = [iter_err]
@@ -88,7 +88,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         #         return 8
 
 
-        while c > tol and counter < 50 and _nextafter.call_count < self.max_ulp_calls:
+        while c > tol and counter < 250 and _nextafter.call_count < self.total_calls:
 
             # L = num_neighbors(c)
             for _ in range(L):
