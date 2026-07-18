@@ -46,17 +46,17 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
         # max_perm = self.p//2
         for _ in range(random.randint(1, 9)):
-            o1 = self.mutate_binary_string(s1)
+            o1 = self.mutate_geneset(s1)
             s1 = o1
         return o1
 
     def generate_new_sol(self, index):
 
-        x_str = self.index_to_binary_string(*index)
+        x_str = self.indices_to_geneset(*index)
         x1 = self.recombine(x_str)
-        x1 = self.mutate_binary_string(x_str)
+        # x1 = self.mutate_geneset(x_str)
 
-        return self.binary_string_to_index(x1)
+        return self.geneset_to_indices(x1)
 
     def search(self, c, L, *,
                cooling_r = 0.8,

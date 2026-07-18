@@ -153,13 +153,14 @@ class AdvPerturbation:
         self.p  = p
         self._p = int(p*input_matrix.numel())
 
-        if self.tensor_prod: # Input is a matrix
-            self.input_shape = input_matrix.shape
+        self.input_shape = input_matrix.shape
+        self.strides = self._strides(self.input_shape)
+        self.total = int(input_matrix.numel())
+            
+        if self.tensor_prod: # Input is a matrix   
             self.n_input  = input_matrix.shape[0]
             self.n_latent = input_matrix.shape[1]
         else: # Input is "image-like": (1, C, H, W)
-            self.input_shape = input_matrix.shape
-            self.channels = input_matrix.shape[1]
             self.n_input  = input_matrix.shape[2] # Height
             self.n_latent = input_matrix.shape[3] # Width
         
@@ -349,40 +350,81 @@ class AdvPerturbation:
         for i in range(len(shape) - 2, -1, -1):
             strides[i] = strides[i + 1] * shape[i + 1]
         return strides
-
-    def index_to_binary_string(self, *indices):
-        strides = self._strides(self.input_shape)
-        flat = torch.zeros_like(indices[0])
-        for idx, stride in zip(indices, strides):
-            flat = flat + idx * stride
-
-        total = 1
-        for d in self.input_shape:
-            total *= d
-
-        bits = torch.zeros(total, dtype=torch.int)
-        bits[flat] = 1
-        return ''.join(bits.numpy().astype(str))
     
-    def binary_string_to_index(self, s):
-        strides = self._strides(self.input_shape)
-        flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
+    # -------- replaces index_to_binary_string --------
+    def indices_to_geneset(self, *indices):
+        """Multi-dim indices -> sorted int64 array of flat positions (the genome)."""
+        idx = [np.asarray(i, dtype=np.int64) for i in indices]
+        flat = np.zeros_like(idx[0])
+        strides =self._strides(self.input_shape)
+        for i, stride in zip(idx, strides):
+            flat += i * stride
+        return np.sort(flat)
 
+    # -------- replaces binary_string_to_index --------
+    def geneset_to_indices(self, genome):
+        """Sorted int64 array of flat positions -> multi-dim index tuple."""
+        flat = np.asarray(genome, dtype=np.int64)
+        remainder = flat.copy()
         indices = []
-        remainder = flat.clone()
-        for stride in strides:
+        for stride in self.strides:
             indices.append(remainder // stride)
-            remainder = remainder % stride
+            remainder %= stride
         return tuple(indices)
     
-    def mutate_binary_string(self, s, n_mutations=1):
-        s = list(s)
-        ones  = [i for i, b in enumerate(s) if b == '1']
-        zeros = [i for i, b in enumerate(s) if b == '0']
+    # -------- replaces mutate_binary_string --------
+    def mutate_geneset(self, genome, n_mutations=1):
+        """genome: 1D int array of active flat positions (length k << total)."""
+        genome = np.asarray(genome, dtype=np.int64)
+        k = len(genome)
 
-        to_clear = random.sample(ones,  n_mutations)
-        to_set   = random.sample(zeros, n_mutations)
+        # pick which currently-on positions to clear
+        clear_pos = np.random.choice(k, size=n_mutations, replace=False)
 
-        for i in to_clear: s[i] = '0'
-        for i in to_set:   s[i] = '1'
-        return ''.join(s)
+        active = set(genome.tolist())
+        new_vals = set()
+        # rejection sampling — fast because k << total
+        while len(new_vals) < n_mutations:
+            cand = random.randrange(self.total)
+            if cand not in active and cand not in new_vals:
+                new_vals.add(cand)
+
+        genome[clear_pos] = list(new_vals)
+        return np.sort(genome)
+
+    # def index_to_binary_string(self, *indices):
+    #     strides = self._strides(self.input_shape)
+    #     flat = torch.zeros_like(indices[0])
+    #     for idx, stride in zip(indices, strides):
+    #         flat = flat + idx * stride
+
+    #     total = 1
+    #     for d in self.input_shape:
+    #         total *= d
+
+    #     bits = torch.zeros(total, dtype=torch.int)
+    #     bits[flat] = 1
+    #     return ''.join(bits.numpy().astype(str))
+    
+    # def binary_string_to_index(self, s):
+    #     strides = self._strides(self.input_shape)
+    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
+
+    #     indices = []
+    #     remainder = flat.clone()
+    #     for stride in strides:
+    #         indices.append(remainder // stride)
+    #         remainder = remainder % stride
+    #     return tuple(indices)
+    
+    # def mutate_binary_string(self, s, n_mutations=1):
+    #     s = list(s)
+    #     ones  = [i for i, b in enumerate(s) if b == '1']
+    #     zeros = [i for i, b in enumerate(s) if b == '0']
+
+    #     to_clear = random.sample(ones,  n_mutations)
+    #     to_set   = random.sample(zeros, n_mutations)
+
+    #     for i in to_clear: s[i] = '0'
+    #     for i in to_set:   s[i] = '1'
+    #     return ''.join(s)

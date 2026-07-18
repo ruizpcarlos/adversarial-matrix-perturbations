@@ -196,22 +196,22 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
     #     return flat % n, flat // n
 
-    def crossover_uniform(self, s1, s2):
+    # def crossover_uniform(self, s1, s2):
 
-        s1, s2 = list(s1), list(s2)
+    #     s1, s2 = list(s1), list(s2)
 
-        # Separate differing positions by type
-        zero_one = [i for i in range(len(s1)) if s1[i] == '0' and s2[i] == '1']
-        one_zero = [i for i in range(len(s1)) if s1[i] == '1' and s2[i] == '0']
+    #     # Separate differing positions by type
+    #     zero_one = [i for i in range(len(s1)) if s1[i] == '0' and s2[i] == '1']
+    #     one_zero = [i for i in range(len(s1)) if s1[i] == '1' and s2[i] == '0']
 
-        # Swap the same number from each group
-        n_swap = min(len(zero_one), len(one_zero)) // 2
-        swap   = random.sample(zero_one, n_swap) + random.sample(one_zero, n_swap)
+    #     # Swap the same number from each group
+    #     n_swap = min(len(zero_one), len(one_zero)) // 2
+    #     swap   = random.sample(zero_one, n_swap) + random.sample(one_zero, n_swap)
 
-        for i in swap:
-            s1[i], s2[i] = s2[i], s1[i]
+    #     for i in swap:
+    #         s1[i], s2[i] = s2[i], s1[i]
 
-        return ''.join(s1), ''.join(s2)
+    #     return ''.join(s1), ''.join(s2)
 
     # def mutate_binary_string(self, s, n_mutations=1):
     #     s = list(s)
@@ -225,23 +225,46 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     #     for i in to_set:   s[i] = '1'
     #     return ''.join(s)
 
-    def recombine(self, s1, s2):
+    # -------- replaces crossover_uniform --------
+    def crossover_uniform(self, g1, g2):
+        s1, s2 = set(np.asarray(g1).tolist()), set(np.asarray(g2).tolist())
 
-        o1, o2 = self.crossover_uniform(s1, s2)
-        o1 = self.mutate_binary_string(o1)
-        o2 = self.mutate_binary_string(o2)
+        one_zero = list(s1 - s2)   # on in g1, off in g2
+        zero_one = list(s2 - s1)   # on in g2, off in g1
 
+        n_swap = min(len(zero_one), len(one_zero)) // 2
+        to_s1 = set(random.sample(zero_one, n_swap))  # move into s1
+        to_s2 = set(random.sample(one_zero, n_swap))  # move into s2
+
+        new_s1 = (s1 - to_s2) | to_s1
+        new_s2 = (s2 - to_s1) | to_s2
+
+        return (np.array(sorted(new_s1), dtype=np.int64),
+                np.array(sorted(new_s2), dtype=np.int64))
+
+    def recombine(self, g1, g2):
+        o1, o2 = self.crossover_uniform(g1, g2)
+        o1 = self.mutate_geneset(o1)
+        o2 = self.mutate_geneset(o2)
         return o1, o2
+    
+    # def recombine(self, s1, s2):
+
+    #     o1, o2 = self.crossover_uniform(s1, s2)
+    #     o1 = self.mutate_binary_string(o1)
+    #     o2 = self.mutate_binary_string(o2)
+
+    #     return o1, o2
 
     def create_offspring(self, parent1, parent2):
 
-        x_str = self.index_to_binary_string(*parent1)
-        y_str = self.index_to_binary_string(*parent2)
+        bx = self.indices_to_geneset(*parent1)
+        by = self.indices_to_geneset(*parent2)
 
-        xy1, xy2 = self.recombine(x_str, y_str)
+        xy1, xy2 = self.recombine(bx, by)
 
-        xy1 = self.binary_string_to_index(xy1)
-        xy2 = self.binary_string_to_index(xy2)
+        xy1 = self.geneset_to_indices(xy1)
+        xy2 = self.geneset_to_indices(xy2)
 
         return xy1, xy2
 
