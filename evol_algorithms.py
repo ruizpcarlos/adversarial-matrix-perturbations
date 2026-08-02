@@ -13,15 +13,21 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def __init__(self,
                 input_matrix,
-                weights,
+                func,
+                c, 
                 p,
                 max_calls = 256,
                 n_generations = 10, 
                 pop_size=50, 
                 mating_pct=0.2):
 
-        super().__init__(input_matrix, weights, p, max_calls)
+        super().__init__(input_matrix, func, c, max_calls)
 
+        assert n_generations*pop_size <= c, "Invalid combination of parameters"
+
+        self.p  = p
+        self._p = int(p*input_matrix.numel())
+                
         self.n_generations = n_generations
         self.pop_size      = pop_size
         self.mating_pct    = mating_pct
@@ -36,44 +42,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             self.fitness    = []
             self.init_population()
 
-    # def __init__(self, input_matrix, weights, p,
-    #              max_calls = 1024,
-    #              n_generations = 10, pop_size=50, mating_pop=10):
-
-    #     self.input_matrix = input_matrix
-
-    #     if isinstance(weights, torch.Tensor):
-    #         weights = [weights]
-
-    #     # Dimension check using consecutive pairs
-    #     _matrices = [input_matrix] + weights
-    #     for a, b in zip(_matrices, _matrices[1:]):
-    #         if a.shape[-1] != b.shape[-2]:
-    #             raise ValueError(
-    #                 f"Shape mismatch: {tuple(a.shape)} vs {tuple(b.shape)} — "
-    #                 f"dim {a.shape[-1]} != {b.shape[-2]}"
-    #             )
-
-    #     self.weights     = weights
-    #     self.weights_gpu = [m.to("cuda") for m in self.weights]
-
-    #     self.n_input    = input_matrix.shape[0]
-    #     self.n_latent   = input_matrix.shape[1]
-
-    #     self.p          = p
-    #     self.max_calls   = max_calls
-    #     self.n_gens     = n_generations
-    #     self.pop_size   = pop_size
-    #     self.mating_pop = mating_pop
-
-    #     self.population = None
-    #     self.fitness    = None
-
-    #     if self.population is None:
-    #         self.population = []
-    #         self.fitness    = []
-    #         self.init_population()
-
     def init_population(self):
 
         first_gen = [self._sample_entries(self._p) for _ in range(self.pop_size)]
@@ -83,7 +51,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.population.append(first_gen)
         self.fitness.append(gen_error)
         self.sort_generation()
-        self.ulp_calls.append(_nextafter.call_count)
+        self.ulp_calls.append(self.compute_max_err.call_count)
 
 
     def sort_generation(self, gen=-1):
@@ -101,50 +69,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         self.population[gen] = list(current_gen)
         self.fitness[gen]    = list(gen_fitness)
-
-    # def compute_max_err(self, indices):
-
-    #     # def chain_matmul(m, w):
-    #     #     return reduce(torch.matmul, w, m)
-
-    #     M_    = self.input_matrix.clone()
-    #     M_gpu = M_.to("cuda")
-    #     infty = torch.tensor(torch.inf)
-
-    #     # weights_cpu = self.weights
-    #     mat_cpu     = [None] + self.weights
-    #     mat_gpu     = [None] + self.weights_gpu
-
-    #     abs_err      = 0
-    #     max_error    = 0
-    #     calls_to_max = 1
-
-    #     for i in range(self.max_calls):
-
-    #         # M_[indices] = nextafter(M_[indices], 1)
-    #         # torch wrapped in counter
-    #         M_[indices] = _nextafter(M_[indices], infty)
-
-    #         M_gpu.copy_(M_, non_blocking=True)
-
-    #         mat_cpu[0] = M_
-    #         mat_gpu[0] = M_gpu
-
-    #         y_cpu  = multi_dot(mat_cpu)
-    #         y_gpu  = multi_dot(mat_gpu)
-    #         y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
-
-    #         if len(y_diff.shape) > 0:
-    #             y_ = vector_norm(y_diff, ord=np.inf).item()
-    #         else:
-    #             y_ = y_diff.item()
-
-    #         if abs(y_) > abs_err:
-    #             calls_to_max = i+1
-    #             abs_err      = abs(y_)
-    #             max_error    = y_
-
-    #     return calls_to_max, max_error
 
     ################################
     ###    MUTATION FUNCTIONS    ###
@@ -226,27 +150,27 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     #     return ''.join(s)
 
     # -------- replaces crossover_uniform --------
-    def crossover_uniform(self, g1, g2):
-        s1, s2 = set(np.asarray(g1).tolist()), set(np.asarray(g2).tolist())
+    # def crossover_uniform(self, g1, g2):
+    #     s1, s2 = set(np.asarray(g1).tolist()), set(np.asarray(g2).tolist())
 
-        one_zero = list(s1 - s2)   # on in g1, off in g2
-        zero_one = list(s2 - s1)   # on in g2, off in g1
+    #     one_zero = list(s1 - s2)   # on in g1, off in g2
+    #     zero_one = list(s2 - s1)   # on in g2, off in g1
 
-        n_swap = min(len(zero_one), len(one_zero)) // 2
-        to_s1 = set(random.sample(zero_one, n_swap))  # move into s1
-        to_s2 = set(random.sample(one_zero, n_swap))  # move into s2
+    #     n_swap = min(len(zero_one), len(one_zero)) // 2
+    #     to_s1 = set(random.sample(zero_one, n_swap))  # move into s1
+    #     to_s2 = set(random.sample(one_zero, n_swap))  # move into s2
 
-        new_s1 = (s1 - to_s2) | to_s1
-        new_s2 = (s2 - to_s1) | to_s2
+    #     new_s1 = (s1 - to_s2) | to_s1
+    #     new_s2 = (s2 - to_s1) | to_s2
 
-        return (np.array(sorted(new_s1), dtype=np.int64),
-                np.array(sorted(new_s2), dtype=np.int64))
+    #     return (np.array(sorted(new_s1), dtype=np.int64),
+    #             np.array(sorted(new_s2), dtype=np.int64))
 
-    def recombine(self, g1, g2):
-        o1, o2 = self.crossover_uniform(g1, g2)
-        o1 = self.mutate_geneset(o1)
-        o2 = self.mutate_geneset(o2)
-        return o1, o2
+    # def recombine(self, g1, g2):
+    #     o1, o2 = self.crossover_uniform(g1, g2)
+    #     o1 = self.mutate_geneset(o1)
+    #     o2 = self.mutate_geneset(o2)
+    #     return o1, o2
     
     # def recombine(self, s1, s2):
 
@@ -300,7 +224,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         self.population.append(new_gen)
         self.fitness.append(gen_error)
-        self.ulp_calls.append(_nextafter.call_count)
+        self.ulp_calls.append(self.compute_max_err.call_count)
 
         # Sort and trim to keep pop_size individuals
         self.sort_generation()
@@ -321,7 +245,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def search(self, early_stopping=True, verbose=False, print_plots = False):
 
-        _nextafter.reset()
+        self.compute_max_err.reset()
         self.init_population()
 
         if verbose:
@@ -335,10 +259,12 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         counter = 0
         j       = 1
-        pop_set = len(set(self.fitness[-1]))
+        # pop_set = len(set(self.fitness[-1]))
 
-        while (_nextafter.call_count < self.total_calls and j <=self.n_generations
-               and counter < 7 and pop_set > 1):
+        while (self.compute_max_err.call_count <= self.c 
+               and j<=self.n_generations
+               # and pop_set > 1
+               and counter < 7):
 
             start_t = time.time()
             self.evolve_generation()
@@ -346,7 +272,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
             n_calls, err         = self.fitness[-1][0]
             prev_calls, prev_err = self.fitness[-2][0]
-            pop_set              = len(set(self.fitness[-1]))
+            # pop_set              = len(set(self.fitness[-1]))
 
             if early_stopping: # If early_stopping is False, the counter never grows
                 counter = 0 if (err > prev_err or n_calls < prev_calls) else counter+1
@@ -354,11 +280,10 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             if verbose:
                 print(f"Evolved {j+1} generations ({counter}) in {total_t:.3f}s -- ",
                       f"max error = {err:.4e}, ulp calls = {n_calls}")
-                # print(_nextafter.call_count)
+                # print(self.compute_max_err.call_count)
             if print_plots:
                 self.generation_plot()
 
-            
             j+=1
 
         self.n_generations = j

@@ -104,7 +104,7 @@ def nextafter(x: torch.Tensor, offset: torch.Tensor):
 
 class AdvPerturbation:
 
-    def __init__(self, input_matrix: torch.Tensor, func, p, 
+    def __init__(self, input_matrix: torch.Tensor, func, c,
                  max_calls = 256):
 
         self.input_matrix = input_matrix
@@ -150,8 +150,7 @@ class AdvPerturbation:
         self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
         self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
 
-        self.p  = p
-        self._p = int(p*input_matrix.numel())
+        self.c = c # Controls the number of calls to compute_max_err
 
         self.input_shape = input_matrix.shape
         self.strides = self._strides(self.input_shape)
@@ -164,8 +163,10 @@ class AdvPerturbation:
             self.n_input  = input_matrix.shape[2] # Height
             self.n_latent = input_matrix.shape[3] # Width
         
-        self.max_calls    = max_calls
-        self.total_calls = self._p*max_calls
+        self.max_calls   = max_calls
+        self.total_calls = self.c*max_calls
+
+        self.compute_max_err = CallTracker(self.compute_max_err)
     
     def flat_to_3d(self, idx):
         aux_idx = idx % (self.n_latent**2)
@@ -175,7 +176,7 @@ class AdvPerturbation:
         return c, h, w
 
 
-    def _sample_entries(self, num_samples):
+    def _sample_entries(self, num_samples=1):
 
         flat_idx = torch.randint(self.input_matrix.numel(), 
                                 (num_samples,)
@@ -226,7 +227,9 @@ class AdvPerturbation:
         return _y
 
 
-    def random_perturbation(self, step=1,  pool_ulp=False, verbose =False):
+    def random_perturbation(self, step=1, verbose =False):
+
+        _nextafter.reset()
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
@@ -235,28 +238,26 @@ class AdvPerturbation:
             mat_cpu  = [None] + self.weights
             mat_gpu  = [None] + self.weights_gpu
         
-        abs_err    = -1
-        aux_div    = (step*self._p) if pool_ulp else step
-        aux_sample = self._p if pool_ulp else 1
-        n_iter     = self.total_calls//aux_div
-        infty      = torch.tensor(torch.inf)
+        abs_err = -1
+        n_iter  = self.total_calls//step
+        infty   = torch.tensor(torch.inf)
 
         y = np.zeros(n_iter)
-        perturbation_dict = dict()
+        counts = {}
+        maxed = set()
+        # perturbation_dict = dict()
 
         iterator = tqdm(range(n_iter)) if verbose else range(n_iter)
 
         for i in iterator:
 
-            idx = self._sample_entries(aux_sample)
-           
-            if idx in perturbation_dict:
-                if perturbation_dict[idx] >= self.max_calls:
-                    continue
-                else:
-                    perturbation_dict[idx] += step     
-            else:
-                perturbation_dict.update({idx: step})
+            idx = self._sample_entries()
+            while idx in maxed:
+                idx = self._sample_entries()
+
+            counts[idx] = counts.get(idx, 0) + 1
+            if counts[idx] >= self.max_calls:
+                maxed.add(idx)
 
             # idx = self._sample_entries()
             # for i in range(self._p):
@@ -287,12 +288,13 @@ class AdvPerturbation:
 
             if abs(_y) > abs_err:
                 abs_err  = abs(_y)
-                max_pert = perturbation_dict.copy()
+                max_pert = {k:v for k, v in counts.items()}
                 
         return torch.Tensor(y).unsqueeze(0), max_pert
     
-
-    def compute_max_err(self, indices):
+    
+    # @CallTracker
+    def compute_max_err(self, indices=None):
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
@@ -309,8 +311,11 @@ class AdvPerturbation:
         for i in range(self.max_calls):
 
             # M_[indices] = nextafter(M_[indices], 1)
-            # torch wrapped in counter
-            X_[indices] = _nextafter(X_[indices], infty)
+            if indices is not None:
+                # torch wrapped in counter
+                X_[indices] = _nextafter(X_[indices], infty)
+            else:
+                X_ = _nextafter(X_, infty)
 
             X_gpu.copy_(X_, non_blocking=True)
 
@@ -391,6 +396,29 @@ class AdvPerturbation:
 
         genome[clear_pos] = list(new_vals)
         return np.sort(genome)
+
+    def crossover_uniform(self, g1, g2):
+        s1, s2 = set(np.asarray(g1).tolist()), set(np.asarray(g2).tolist())
+    
+        one_zero = list(s1 - s2)   # on in g1, off in g2
+        zero_one = list(s2 - s1)   # on in g2, off in g1
+    
+        n_swap = min(len(zero_one), len(one_zero)) // 2
+        to_s1 = set(random.sample(zero_one, n_swap))  # move into s1
+        to_s2 = set(random.sample(one_zero, n_swap))  # move into s2
+    
+        new_s1 = (s1 - to_s2) | to_s1
+        new_s2 = (s2 - to_s1) | to_s2
+    
+        return (np.array(sorted(new_s1), dtype=np.int64),
+                np.array(sorted(new_s2), dtype=np.int64))
+    
+    def recombine(self, g1, g2):
+        o1, o2 = self.crossover_uniform(g1, g2)
+        o1 = self.mutate_geneset(o1)
+        o2 = self.mutate_geneset(o2)
+        return o1, o2
+        
 
     # def index_to_binary_string(self, *indices):
     #     strides = self._strides(self.input_shape)

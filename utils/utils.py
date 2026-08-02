@@ -68,7 +68,7 @@ def plot_max(Y_max, Y_hist, labels, n_latent, p, fname=None, show_zero=True):
         fname = "algorithm_perf" + fname + f"_{p}.png"
         plt.savefig(fname)
 
-def annealing_plot(y, y_max, opt_params, n_latent, p, fname):
+def annealing_plot(y, y_max, opt_params, n_latent, p, fname=None):
 
     m = y.shape[0]  # number of searches
     n = y.shape[1]
@@ -82,11 +82,12 @@ def annealing_plot(y, y_max, opt_params, n_latent, p, fname):
         plt.plot(range(n), y_max[i], c=c, label=f"alpha={opt_params[i]}")
         plt.plot(range(n), y[i], c=c, linestyle="dotted")
 
-    fname = "annealingplot_" + fname + f"_{p}.png"
 
     plt.title(f"Simmulated annealing on {n_latent} dims\n perturbed {p} entries")
     plt.legend()
-    plt.savefig(fname)
+    if fname:
+        fname = "annealingplot_" + fname + f"_{p}.png"
+        plt.savefig(fname)
 
 def track_evol_(Y, n_calls):
 
