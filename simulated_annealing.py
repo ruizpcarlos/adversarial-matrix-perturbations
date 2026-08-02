@@ -126,7 +126,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         iter_calls, iter_err = self.compute_max_err(iter_idx)
 
         Y = [iter_err]
-        self.ulp_calls.append(self.compute_max_err.call_count)
+        self.ulp_calls.append(self.max_calls*self.compute_max_err.call_count)
 
         # Init the best sol
         best_idx   = iter_idx
@@ -171,7 +171,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                     best_calls = n_calls
                     # break
 
-            self.ulp_calls.append(self.compute_max_err.call_count)
+            self.ulp_calls.append(self.max_calls*self.compute_max_err.call_count)
 
             Y.append(iter_err)
 

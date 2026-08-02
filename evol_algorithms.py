@@ -224,7 +224,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         self.population.append(new_gen)
         self.fitness.append(gen_error)
-        self.ulp_calls.append(self.compute_max_err.call_count)
+        self.ulp_calls.append(self.max_calls*self.compute_max_err.call_count)
 
         # Sort and trim to keep pop_size individuals
         self.sort_generation()
@@ -262,7 +262,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         # pop_set = len(set(self.fitness[-1]))
 
         while (self.compute_max_err.call_count <= self.c 
-               and j<=self.n_generations
+               and j<self.n_generations
                # and pop_set > 1
                and counter < 7):
 
@@ -274,17 +274,19 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             prev_calls, prev_err = self.fitness[-2][0]
             # pop_set              = len(set(self.fitness[-1]))
 
+            j+=1
+
             if early_stopping: # If early_stopping is False, the counter never grows
                 counter = 0 if (err > prev_err or n_calls < prev_calls) else counter+1
                 
             if verbose:
-                print(f"Evolved {j+1} generations ({counter}) in {total_t:.3f}s -- ",
+                print(f"Evolved {j} generations ({counter}) in {total_t:.3f}s -- ",
                       f"max error = {err:.4e}, ulp calls = {n_calls}")
                 # print(self.compute_max_err.call_count)
             if print_plots:
                 self.generation_plot()
 
-            j+=1
+            
 
         self.n_generations = j
 
