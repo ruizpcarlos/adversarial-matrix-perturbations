@@ -243,10 +243,10 @@ class errorPlots:
 
             Y[i] = _err
 
-        return Y.unsqueeze(0)
+        return Y#.unsqueeze(0)
 
 
-    def error_distribution(self, n_calls, func_names=None):
+    def error_distribution(self, n_calls, func_names=None, verbose=False):
 
         if isinstance(func_names, str):
             func_names = [func_names]
@@ -263,7 +263,8 @@ class errorPlots:
 
         for k, name in enumerate(func_aux):
 
-            print(f"Computing errors for {name}")
+            if verbose:
+                print(f"Computing errors for {name}")
             _func_check_aux = self.functions[(name, self.DTYPES[0])]
 
             if isinstance(_func_check_aux, torch.Tensor):
@@ -275,12 +276,21 @@ class errorPlots:
 
                 X = X.clone().to(dtype)
 
+                if verbose and self.n_samples>1:
+                    pbar = enumerate(tqdm(X, desc=f"Proccesing {dtype} data", unit="samples"))
+
                 for i, x in enumerate(X):
                     Y  = self.compute_arch_diff(x, name, dtype, n_calls=n_calls)
+
+                    if verbose and dtype==torch.bfloat16:
+                        y_max = torch.max(Y).values().item
+                        if y_max > 0:
+                            print("Found something my guy :)")
 
                     y_dist[k, j, i, :] = Y.ravel()
 
         return y_dist
+    
 
     def plot_distributions(self, y_dist):
 
@@ -289,14 +299,55 @@ class errorPlots:
         plot_error_histograms(y_dist,  self.func_names, self.DTYPES, fname=fname)
 
 
+    def plot_err_signals(self, y_hist, funcname):
+
+        idx = self.func_names.index(funcname)
+        err_bf16 = y_hist[idx, 0, :]
+        err_f32  = y_hist[idx, 1, :]
+        
+        fname = "error_signals.png"
+        
+        iter_error((err_bf16, err_f32),
+                        show_zero=False,
+                        fname=fname)
+
+
+    def stats_plots(self, y_dist, func_names):
+
+        for y, name in list(zip(y_dist, func_names)):
+
+            print(y.shape)
+
+            err_bf16 = y[0, :]
+            err_fp32 = y[1, :]
+            
+            stats_bf16 = cum_stats(err_bf16)
+            stats_fp32 = cum_stats(err_fp32)
+            
+            bf16_data = tensor_to_plotting_inputs(err_bf16)
+            fp32_data = tensor_to_plotting_inputs(err_fp32)
+
+            fname1 = f"acc_distributions_{name}.png"
+            iter_error_distributions((bf16_data, fp32_data),
+                                        fname=fname1)
+            
+            fname2 = f"cum_stats_{name}.png"
+            plot_cum_stats([stats_fp32, stats_bf16],
+                                        fname=fname2)
+            
+        
+    
+
 if __name__=="__main__":
+
+    seed = 161
+    model_name = "resnet"
 
     LATENT_DIM      = 512
     N_CALLS_DELTA   = 1024
     N_CALLS_DELTA_Q = 256
     Q_LIST          = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
 
-    seed = 161
 
     delta_plots = preliminaryPlots(n_latent=LATENT_DIM, seed=seed)
 
@@ -305,7 +356,6 @@ if __name__=="__main__":
 
 
     N_CALLS_DIST = 1024
-    model_name = "resnet"
 
     err_plots = errorPlots(model_name=model_name, seed=seed)
 
@@ -322,9 +372,28 @@ if __name__=="__main__":
     iter_error((err_bf16, err_f32),
                 show_zero=False,
                 fname=fname)
-        
 
+    from_cache   = True
 
-    # SEED = 1611
-    # random.seed(SEED)
+    N_CALLS_DIST = 256
+    N_SAMPLES    = 30
+    DIST_FUNCS   = [f'{model_name}_clf']
 
+    acc_err_plots = errorPlots(model_name=model_name, 
+                               seed=seed, 
+                               n_samples=N_SAMPLES)
+
+    pkl_name = "error_dist.pkl"
+                        
+    if not from_cache:
+        y_dist = acc_err_plots.error_distribution(N_CALLS_DIST, func_names=DIST_FUNCS)
+        with open(pkl_name, 'wb') as f:
+                    pickle.dump(y_dist, f)
+    else:
+        print(f"Reading experiment results from {pkl_name}")
+        with open(pkl_name, 'rb') as f:
+            y_dist = pickle.load(f)
+    
+    acc_err_plots.stats_plots(y_dist, func_names=DIST_FUNCS)
+
+    

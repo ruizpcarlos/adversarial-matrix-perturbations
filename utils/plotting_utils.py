@@ -297,3 +297,37 @@ def plot_error_histograms(y_dist, func_names, dtypes, fname=None):
 
         plt.tight_layout()
         plt.show()
+        
+
+def plot_cum_stats(Y, fname=None):
+
+    labels     = ['max', 'q99', 'q75', 'median']
+    linestyles = ['-', '--', '-.', ':']
+    color      = 'black'
+
+    x = range(Y[0].shape[1])
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+
+    for i, ax in enumerate(axes):
+        y_stats = Y[i]
+
+        fp2 = "bf16" if i==1 else "fp32"
+
+        ax.set_title(f"Cumulative Error Stats ({fp2})")
+        ax.set_ylabel("Error")
+        ax.set_xlabel("ULP Calls")
+
+        for row, label, ls in zip(y_stats, labels, linestyles):
+            ax.plot(x, row.numpy(), color=color, linestyle=ls, label=label)
+
+    # Build explicit linestyle handles
+    handles = [
+        Line2D([0], [0], color=color, linestyle=ls, label=label)
+        for label, ls in zip(labels, linestyles)
+    ]
+
+    fig.legend(handles=handles, loc='upper center', ncol=len(labels))
+    if fname is not None:
+        fig.savefig(fname, bbox_inches="tight")
+    plt.show()
