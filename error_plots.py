@@ -305,7 +305,7 @@ class errorPlots:
         err_bf16 = y_hist[idx, 0, :]
         err_f32  = y_hist[idx, 1, :]
         
-        fname = "error_signals.png"
+        fname = f"error_signals_{funcname}.png"
         
         iter_error((err_bf16, err_f32),
                         show_zero=False,
@@ -315,8 +315,6 @@ class errorPlots:
     def stats_plots(self, y_dist, func_names):
 
         for y, name in list(zip(y_dist, func_names)):
-
-            print(y.shape)
 
             err_bf16 = y[0, :]
             err_fp32 = y[1, :]
@@ -343,50 +341,42 @@ if __name__=="__main__":
     seed = 161
     model_name = "resnet"
 
-    LATENT_DIM      = 512
-    N_CALLS_DELTA   = 1024
-    N_CALLS_DELTA_Q = 256
-    Q_LIST          = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+
+    LATENT_DIM = 512
+    N_CALLS    = 1024
+    N_CALLS_Q  = 256
+    Q_LIST     = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
 
 
+    # GROWTH OF DELTA
     delta_plots = preliminaryPlots(n_latent=LATENT_DIM, seed=seed)
 
-    delta_plots.perturbation_size_plots(N_CALLS_DELTA)
-    delta_plots.perturbation_size_plots(N_CALLS_DELTA_Q,  qs_list=Q_LIST)
+    delta_plots.perturbation_size_plots(N_CALLS)
+    delta_plots.perturbation_size_plots(N_CALLS_Q,  qs_list=Q_LIST)
 
 
-    N_CALLS_DIST = 1024
-
+    # DTYPE - MODEL HISTOGRAMS
+    funcname = f'{model_name}_clf'
+    
     err_plots = errorPlots(model_name=model_name, seed=seed)
-
-    y_hist = err_plots.error_distribution(N_CALLS_DIST)
+    y_hist    = err_plots.error_distribution(N_CALLS)
 
     err_plots.plot_distributions(y_hist)
+    err_plots.plot_err_signals(y_hist, funcname)
 
 
-    err_bf16 = y_hist[1, 0, :]
-    err_f32  = y_hist[1, 1, :]
-
-    fname = "error_signals.png"
-
-    iter_error((err_bf16, err_f32),
-                show_zero=False,
-                fname=fname)
-
-    from_cache   = True
-
-    N_CALLS_DIST = 256
-    N_SAMPLES    = 30
-    DIST_FUNCS   = [f'{model_name}_clf']
+    # CUMULATIVE ERROR DISTRIBUTIONS
+    from_cache = True
+    pkl_name   = "error_dist.pkl"
+        
+    N_SAMPLES  = 30
 
     acc_err_plots = errorPlots(model_name=model_name, 
                                seed=seed, 
                                n_samples=N_SAMPLES)
-
-    pkl_name = "error_dist.pkl"
-                        
+                      
     if not from_cache:
-        y_dist = acc_err_plots.error_distribution(N_CALLS_DIST, func_names=DIST_FUNCS)
+        y_dist = acc_err_plots.error_distribution(N_CALLS, func_names=funcname)
         with open(pkl_name, 'wb') as f:
                     pickle.dump(y_dist, f)
     else:
@@ -394,6 +384,6 @@ if __name__=="__main__":
         with open(pkl_name, 'rb') as f:
             y_dist = pickle.load(f)
     
-    acc_err_plots.stats_plots(y_dist, func_names=DIST_FUNCS)
+    acc_err_plots.stats_plots(y_dist, func_names=funcname)
 
-    
+    # use N_CALLS_Q
