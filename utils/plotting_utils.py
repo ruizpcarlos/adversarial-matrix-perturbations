@@ -331,3 +331,54 @@ def plot_cum_stats(Y, fname=None):
     if fname is not None:
         fig.savefig(fname, bbox_inches="tight")
     plt.show()
+
+
+def q_error_distributions(Ys, Xmax, fname=None):
+    """
+    Ys: list of dictionaries of numpy arrays for plotting
+    """
+    if len(Ys) != 2:
+        raise ValueError(f"Expected 2 tensors (one per row), got {len(Ys)}")
+
+    for Y in Ys:
+        if len(Y) > 2:
+            raise ValueError(f"What is this bullshit")
+
+    fig, axes = plt.subplots(nrows=2, ncols=2,
+                              figsize=[18, 10],
+                              sharey='row',
+                              gridspec_kw={'width_ratios': [3, 1]})
+
+    for row, Y in enumerate(Ys):
+        ax1, ax2 = axes[row]
+
+        df = Y[0]
+        y_dist = Y[1]
+        max_err = Xmax[row]
+
+        fp = "fp32" if row==1 else "bf16"
+
+        sns.stripplot(data=df, x="q", y="error", ax=ax1)
+        ax1.set_title(f"Max Error Distributions ({fp})")
+        ax1.set_ylabel("Max Error")
+        ax1.set_xlabel("% of perturbed indices (q)")
+        ax1.axhline(y=max_err,
+                    c = "tab:grey", linestyle=":",
+                    # label = "Max err for full matrix perturbation"
+                    )
+        ax1.legend()
+
+        n_values = np.unique(y_dist).shape[0]
+        bins = max(0, min(26, n_values))
+
+        fp  = "Half" if row==0 else "Single"
+        fp2 = "bf16" if row==0 else "fp32"
+
+        ax2.set_title(f"Max Error distribution \n {n_values} unique values")
+        ax2.hist(y_dist, bins=bins, orientation="horizontal")
+        ax2.axhline(y=max_err, c = "tab:grey", linestyle=":")
+
+    if fname is not None:
+        fig.savefig(fname, bbox_inches="tight")
+
+    plt.show()

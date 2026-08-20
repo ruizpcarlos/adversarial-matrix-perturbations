@@ -101,3 +101,15 @@ def tensor_to_plotting_inputs(y:torch.Tensor):
     y_dist = arrays[n_calls]
 
     return df, y_dist
+
+
+def dict_to_plotting_data(y_stats):
+
+    df = pd.DataFrame({
+                "q": np.concatenate([np.full(len(err), q) for q, err in y_stats.items()]),
+                "error": np.concatenate(list(y_stats.values()))
+                })
+
+    y_hist = df.error.values
+
+    return df, y_hist
