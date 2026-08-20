@@ -1,37 +1,19 @@
 import pickle
-import time
 import torch
 import random
 import copy
 import itertools
-import functools
-import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
-import pandas as pd
-import seaborn as sns
 
 import torchvision.models as models
 
 from psutil import *
 from tqdm import tqdm
-from matplotlib.lines import Line2D
-from torch.linalg import vector_norm, matrix_norm, multi_dot
+from torch.linalg import vector_norm
 
-from utils.utils import product_err, cum_stats, tensor_to_plotting_inputs, dict_to_plotting_data
+from utils.utils import product_err, cum_stats, tensor_to_plotting_inputs, dict_to_plotting_data, print_sys_specs
 from utils.plotting_utils import *
-
-
-def print_sys_specs():
-    # This code will return the number of CPU
-    print("Number of CPU: ", cpu_count())
-    # This code will return the CPU info
-    # !cat /proc/cpuinfo
-
-    if torch.cuda.is_available():
-        print(torch.cuda.get_device_name())
-    else:
-        print("GPU not available: Connect to a GPU environment")
 
 
 
@@ -455,12 +437,13 @@ if __name__=="__main__":
     seed = 161
     model_name = "resnet"
 
-
     LATENT_DIM = 512
     N_CALLS    = 1024
     N_CALLS_Q  = 256
     Q_LIST     = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
 
+    # Print CPU and GPU DATA
+    print_sys_specs()
 
     # GROWTH OF DELTA
     delta_plots = deltaNormPlots(n_latent=LATENT_DIM, seed=seed)

@@ -1,15 +1,32 @@
 import torch
 import hashlib
-import pickle
+import pickle  
+import platform
+import psutil  # pip install psutil
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
 from torch.linalg import vector_norm, multi_dot
 
-from matplotlib.lines import Line2D
 
+
+def print_sys_specs():
+  
+    print("Processor:", platform.processor())
+    print("Architecture:", platform.machine())
+    print("Physical cores:", psutil.cpu_count(logical=False))
+    print("Total cores:", psutil.cpu_count(logical=True))
+    print("CPU Frequency:", psutil.cpu_freq())
+
+    if torch.cuda.is_available():
+        print("GPU:", torch.cuda.get_device_name(0))
+        print("GPU count:", torch.cuda.device_count())
+        print("Memory allocated:", torch.cuda.memory_allocated(0))
+        print("Memory reserved:", torch.cuda.memory_reserved(0))
+    else:
+        print("GPU not available: Connect to a GPU environment")
+        
 
 def hash_tensor(*tensors: torch.Tensor):
     h = hashlib.sha256()
