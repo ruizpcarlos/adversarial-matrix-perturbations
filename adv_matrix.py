@@ -2,7 +2,7 @@ import torch
 import random
 import copy
 import functools
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
 
@@ -146,7 +146,8 @@ class AdvPerturbation:
         #             f"Shape mismatch: {tuple(a.shape)} vs {tuple(b.shape)} — "
         #             f"dim {a.shape[-1]} != {b.shape[-2]}"
         #         )
-
+        self.INFTY = torch.tensor(torch.inf)
+        
         self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
         self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
 
@@ -240,7 +241,7 @@ class AdvPerturbation:
         
         abs_err = -1
         n_iter  = self.total_calls//step
-        infty   = torch.tensor(torch.inf)
+        # infty   = torch.tensor(torch.inf)
 
         y = np.zeros(n_iter)
         counts = {}
@@ -269,9 +270,9 @@ class AdvPerturbation:
  
             if step > 1:
                 for _ in range(step):
-                    X_[idx] = _nextafter(X_[idx], infty)
+                    X_[idx] = _nextafter(X_[idx], self.INFTY)
             else:
-                X_[idx] = _nextafter(X_[idx], infty)
+                X_[idx] = _nextafter(X_[idx], self.INFTY)
 
             X_gpu.copy_(X_, non_blocking=True)
 
@@ -298,7 +299,7 @@ class AdvPerturbation:
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
-        infty = torch.tensor(torch.inf)
+        # infty = torch.tensor(torch.inf)
 
         if self.tensor_prod:
             mat_cpu  = [None] + self.weights
@@ -313,9 +314,9 @@ class AdvPerturbation:
             # M_[indices] = nextafter(M_[indices], 1)
             if indices is not None:
                 # torch wrapped in counter
-                X_[indices] = _nextafter(X_[indices], infty)
+                X_[indices] = _nextafter(X_[indices], self.INFTY)
             else:
-                X_ = _nextafter(X_, infty)
+                X_ = _nextafter(X_, self.INFTY)
 
             X_gpu.copy_(X_, non_blocking=True)
 

@@ -2,10 +2,13 @@ import torch
 import hashlib
 import pickle
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
 from torch.linalg import vector_norm, multi_dot
+
+from matplotlib.lines import Line2D
 
 
 def hash_tensor(*tensors: torch.Tensor):
@@ -30,65 +33,6 @@ def save_dict_to_pickle(data_dict: dict, filename):
     print(f"--- Saved results in {filename}")
 
 
-def plot_max(Y_max, Y_hist, labels, n_latent, p, fname=None, show_zero=True):
-
-    if Y_max.dim()>2:
-        raise ValueError(f"Expected 2D tensor, got shape {Y_hist.shape}")
-
-    Y_hist = Y_hist.squeeze().ravel()
-
-    
-    X    = range(Y_max.shape[1])
-    Y_np = Y_max.numpy()
-
-    fig, (ax1, ax2) = plt.subplots(ncols=2, figsize= [15, 5],
-                                   sharey=True,
-                                   gridspec_kw={'width_ratios': [3, 1]}
-                                   )
-
-    ax1.set_title(f"Error vs no. of ULP calls\n {n_latent} latent dims -  perturbed {p} entries")
-    lines = ax1.plot(X, Y_max.T, linestyle="--")
-    for line, name in zip(lines, labels):
-        line.set_label(name)
-    ax1.legend()
-
-    n_values  = Y_hist.unique().numel()
-    Y_hist_np = Y_hist.numpy()
-    n_bins    = min(50, max(10, int(np.sqrt(Y_hist_np.size))))  # Sturges/sqrt-style heuristic
-
-    # _weights = np.ones_like(Y_hist_np) / Y_hist_np.size # Corrects issues w bin width/density integration
-    ax2.set_title(f"Error distribution \n {n_values} unique values")
-    ax2.hist(Y_hist_np, density=False, bins=n_bins, orientation = "horizontal")
-
-    if show_zero:
-        ax1.axhline(y=0, linestyle = "--", color = "grey")
-        ax2.axhline(y=0, linestyle = "--", color = "grey")
-
-    if fname is not None:
-        fname = "algorithm_perf" + fname + f"_{p}.png"
-        plt.savefig(fname)
-
-def annealing_plot(y, y_max, opt_params, n_latent, p, fname=None):
-
-    m = y.shape[0]  # number of searches
-    n = y.shape[1]
-
-    assert len(opt_params) == m, "Number of tensors and params mismatch"
-
-    colors = plt.cm.tab10.colors  # or tab20 if m > 10
-
-    for i in range(m):
-        c = colors[i % len(colors)]
-        plt.plot(range(n), y_max[i], c=c, label=f"alpha={opt_params[i]}")
-        plt.plot(range(n), y[i], c=c, linestyle="dotted")
-
-
-    plt.title(f"Simmulated annealing on {n_latent} dims\n perturbed {p} entries")
-    plt.legend()
-    if fname:
-        fname = "annealingplot_" + fname + f"_{p}.png"
-        plt.savefig(fname)
-
 def track_evol_(Y, n_calls):
 
     max_err = Y.squeeze()
@@ -100,6 +44,7 @@ def track_evol_(Y, n_calls):
         y_max[idx_aux[k]: idx_aux[k+1]] = max_err[k]
 
     return y_max.unsqueeze(0)
+
 
 def pad_to_match(tensors):
     max_len = max(t.size(1) for t in tensors)
@@ -123,3 +68,48 @@ def product_err(mat_cpu, mat_gpu):
         _y = y_diff.item()
 
     return _y
+
+
+def cum_stats(y:torch.Tensor):
+
+    m = y.shape[1]
+
+    iter_max   = torch.cummax(y.max(dim=0).values.squeeze(),
+                            dim=0).values
+    acc_q90    = torch.tensor([torch.quantile(y[:, :k].float(), 0.99) for k in range(1, m+1)])
+    acc_q75    = torch.tensor([torch.quantile(y[:, :k].float(), 0.75) for k in range(1, m+1)])
+    acc_median = torch.tensor([torch.quantile(y[:, :k].float(), 0.5) for k in range(1, m+1)])
+
+    # cum_sum = y.cumsum(dim=1).sum(dim=0)  # cumulative sum over columns, summed across rows
+    # counts = torch.arange(1, m + 1) * n_rows
+    # cum_mean = cum_sum / counts
+
+    return torch.stack([iter_max, acc_q90, acc_q75, acc_median])
+
+
+def tensor_to_plotting_inputs(y:torch.Tensor):
+
+    n_calls = y.shape[1]
+    end     = int(np.log2(n_calls))+1
+    arrays  = {2**k: y[:, :2**k].ravel().numpy() for k in range(5, end)}
+
+    df = pd.DataFrame({
+        "n_calls": np.concatenate([np.full(len(v), j) for j, v in arrays.items()]),
+        "error": np.concatenate(list(arrays.values()))
+    })
+
+    y_dist = arrays[n_calls]
+
+    return df, y_dist
+
+
+def dict_to_plotting_data(y_stats):
+
+    df = pd.DataFrame({
+                "q": np.concatenate([np.full(len(err), q) for q, err in y_stats.items()]),
+                "error": np.concatenate(list(y_stats.values()))
+                })
+
+    y_hist = df.error.values
+
+    return df, y_hist
