@@ -5,8 +5,15 @@ import itertools
 import matplotlib.pyplot as plt
 import numpy as np
 
-from torch.linalg import vector_norm, multi_dot
-from adv_matrix import AdvPerturbation, _nextafter
+import torchvision.models as models
+
+# from torch.linalg import vector_norm, multi_dot
+from tqdm import tqdm
+
+from adv_matrix import AdvPerturbation
+from utils.utils import save_dict_to_pickle
+from utils.plotting_utils import generation_plot
+
 
 
 class AdversarialGeneticAlgorithm(AdvPerturbation):
@@ -15,7 +22,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 input_matrix,
                 func,
                 c, 
-                p,
+                q,
                 max_calls = 256,
                 n_generations = 10, 
                 pop_size=50, 
@@ -25,8 +32,8 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         assert n_generations*pop_size <= c, "Invalid combination of parameters"
 
-        self.p  = p
-        self._p = int(p*input_matrix.numel())
+        self.q  = q
+        self._p = int(q*input_matrix.numel())
                 
         self.n_generations = n_generations
         self.pop_size      = pop_size
@@ -229,19 +236,14 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         # Sort and trim to keep pop_size individuals
         self.sort_generation()
 
-    def generation_plot(self, gen=-1):
-        _scores = self.fitness[gen]
-        _best   = _scores[:self.mating_pop]
 
-        plt.title(f"Generation {len(self.population)}")
-        plt.xlabel("ULP calls")
-        plt.ylabel("Max Error")
-        plt.scatter([x[0] for x in _scores],
-                    [x[1] for x in _scores])
-        plt.scatter([x[0] for x in _best],
-                    [x[1] for x in _best],
-                    marker = '*')
-        plt.show()
+    def generation_plot(self, gen=-1):
+        scores = self.fitness[gen]
+        best   = scores[:self.mating_pop]
+        n_gen   = len(self.population)
+
+        generation_plot(scores, best, n_gen)
+    
 
     def search(self, early_stopping=True, verbose=False, print_plots = False):
 
@@ -301,3 +303,136 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             y_max[idx_aux[k]: idx_aux[k+1]] = max_err[k]
 
         return y_max.unsqueeze(0)
+
+
+
+if __name__ == "__main__":
+
+    n_test     = 1   # number of repeated runs per (pop_size, p) configuration
+    model_name = "ResNet"
+    seed       = 420
+
+    random.seed(seed)
+
+    # ------------------------------------------------------------------
+    # EXPERIMENT INPUTS
+    # ------------------------------------------------------------------
+    if model_name.upper().startswith("EFF"):
+        model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
+        W     = torch.transpose(model.classifier[1].weight.data, 0, 1)
+    else:
+        model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
+        W     = torch.transpose(model.fc.weight.data, 0, 1)
+                
+    n_latent = W.shape[0]
+
+    W0    = torch.randn(n_latent, n_latent)  
+    X     = torch.randn(n_latent, n_latent)
+    X_img = torch.randn(1, 3, 224, 224)
+    
+    c = 1000                      # total budget of calls to compute_max_err
+
+    # ------------------------------------------------------------------
+    # Grid search over population size and perturbation fraction
+    # ------------------------------------------------------------------
+    pop_sizes = [20, 50, 80, 100]
+    q_values  = [0.05, 0.1, 0.15, 0.2]
+    
+    adv_pert   = AdvPerturbation(X, W, c)
+    target_err = adv_pert.full_perturbation_err
+    print(f"Full matrix perturbation error: {target_err:.4e}")
+
+    results = []
+    fname   = f"grid_search_{model_name}_{seed}.pkl"
+
+    pbar = tqdm(list(itertools.product(pop_sizes, q_values)))
+    for pop_size, q in pbar:
+        pbar.set_description(f"Running test for pop_size={pop_size}, q={q:.2f}")
+
+        # n_generations must satisfy: n_generations * pop_size <= c
+        n_generations = max(1, c // pop_size)
+
+        run_errs   = []
+        run_calls  = []
+        run_times  = []
+        run_gens   = []
+
+        for trial in range(n_test):
+
+            ga = AdversarialGeneticAlgorithm(
+                input_matrix=X,
+                func=W,
+                c=c,
+                q=q,
+                n_generations=n_generations,
+                pop_size=pop_size,
+            )
+
+            start_t = time.time()
+            ga.search(early_stopping=True, verbose=False, print_plots=False)
+            elapsed = time.time() - start_t
+
+            best_calls, best_err = ga.fitness[-1][0]
+
+            run_errs.append(abs(best_err))
+            run_calls.append(best_calls)
+            run_times.append(elapsed)
+            run_gens.append(ga.n_generations)
+
+            print(f"pop_size={pop_size:>4} | q={q:>5.2f} | trial={trial+1}/{n_test} | "
+                  f"gens={ga.n_generations:>3} | "
+                  f"best_err={abs(best_err):.4e} | "
+                  f"ulp_calls={best_calls:>6} | "
+                  f"time={elapsed:.2f}s")
+
+        run_errs    = np.array(run_errs)
+        success_pct = (run_errs >= target_err).sum()/n_test
+
+        results.append({
+            "pop_size":       pop_size,
+            "p":              q,
+            "n_test":         n_test,
+            "target_err":     target_err, 
+            "std_err":        run_errs.std(),
+            "max_err":        run_errs.max(),
+            "eff_pct":        success_pct,
+            "err_dist":       run_errs,
+            "mean_ulp_calls": float(np.mean(run_calls)),
+            "mean_time_s":    float(np.mean(run_times)),
+            "max_gens":       n_generations,
+            "mean_gens":      float(np.mean(run_gens)),
+        })
+
+        save_dict_to_pickle(results, filename=fname)
+
+        print(f"  -> max_err={run_errs.max():.4e} (std={run_errs.std():.4e}) "
+              f"{(100*success_pct):.2f}% success over {n_test} trials\n")
+
+    # ------------------------------------------------------------------
+    # Best configuration (highest mean max error achieved)
+    # ------------------------------------------------------------------
+    best = max(results, key=lambda r: r["mean_err"])
+    print("Best configuration:")
+    print(f"  pop_size = {best['pop_size']}, q = {best['q']} "
+          f"-> {(100*success_pct):.2f}% success w/ mean_err = {best['mean_err']:.4e} (std = {best['std_err']:.4e}) "
+          f"over {n_test} trials "
+          f"(mean ulp_calls = {best['mean_ulp_calls']:.0f}, "
+          f"mean time = {best['mean_time_s']:.2f}s)")
+
+    # ------------------------------------------------------------------
+    # Heatmap of mean best error over the (pop_size, p) grid
+    # ------------------------------------------------------------------
+    err_grid = np.array([r["mean_err"] for r in results]).reshape(
+        len(pop_sizes), len(q_values)
+    )
+
+    plt.figure()
+    plt.imshow(err_grid, aspect="auto", origin="lower")
+    plt.colorbar(label=f"Mean best max error (n_test={n_test})")
+    plt.xticks(range(len(q_values)), q_values)
+    plt.yticks(range(len(pop_sizes)), pop_sizes)
+    plt.xlabel("p (perturbation fraction)")
+    plt.ylabel("pop_size")
+    plt.title("Grid search: pop_size vs q")
+    plt.tight_layout()
+    plt.show()

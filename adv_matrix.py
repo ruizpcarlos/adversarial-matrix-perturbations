@@ -7,9 +7,9 @@ import numpy as np
 import torch.nn as nn
 
 from tqdm import tqdm
-from torch.linalg import vector_norm, multi_dot
-from utils.utils import product_err, plot_max
-
+from torch.linalg import vector_norm
+from utils.utils import product_err
+from utils.plotting_utils import plot_max
 
 class CallTracker:
     def __init__(self, func):
@@ -167,7 +167,11 @@ class AdvPerturbation:
         self.max_calls   = max_calls
         self.total_calls = self.c*max_calls
 
+        _, self.full_perturbation_err = self.compute_max_err()
+
+        # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
+        
     
     def flat_to_3d(self, idx):
         aux_idx = idx % (self.n_latent**2)
