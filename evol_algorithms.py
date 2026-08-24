@@ -288,8 +288,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             if print_plots:
                 self.generation_plot()
 
-            
-
         self.n_generations = j
 
 
@@ -327,8 +325,8 @@ if __name__ == "__main__":
     n_latent = W.shape[0]
 
     W0    = torch.randn(n_latent, n_latent)  
-    X     = torch.randn(n_latent, n_latent)
-    X_img = torch.randn(1, 3, 224, 224)
+    X     = torch.randn(n_test, n_latent, n_latent)
+    X_img = torch.randn(n_test, 1, 3, 224, 224)
     
     c = 1000                      # total budget of calls to compute_max_err
 
@@ -337,10 +335,12 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     pop_sizes = [20, 50, 80, 100]
     q_values  = [0.05, 0.1, 0.15, 0.2]
-    
-    adv_pert   = AdvPerturbation(X, W, c)
-    target_err = adv_pert.full_perturbation_err
-    print(f"Full matrix perturbation error: {target_err:.4e}")
+
+    targets = []
+    for _x in X:
+        targ_aux = AdvPerturbation(_x, W, c)
+        err = targ_aux.full_perturbation_err
+        targets.append(err)
 
     results = []
     fname   = f"grid_search_{model_name}_{seed}.pkl"
@@ -358,9 +358,11 @@ if __name__ == "__main__":
         run_gens   = []
 
         for trial in range(n_test):
+            X_test     = X[trial]
+            target_err = targets[trial]
 
             ga = AdversarialGeneticAlgorithm(
-                input_matrix=X,
+                input_matrix=X_test,
                 func=W,
                 c=c,
                 q=q,
@@ -395,7 +397,7 @@ if __name__ == "__main__":
             "target_err":     target_err, 
             "std_err":        run_errs.std(),
             "max_err":        run_errs.max(),
-            "eff_pct":        success_pct,
+            "success_pct":    success_pct,
             "err_dist":       run_errs,
             "mean_ulp_calls": float(np.mean(run_calls)),
             "mean_time_s":    float(np.mean(run_times)),
