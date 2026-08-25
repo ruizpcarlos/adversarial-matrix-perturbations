@@ -376,3 +376,18 @@ def q_error_distributions(Ys, Xmax, fname=None):
         fig.savefig(fname, bbox_inches="tight")
 
     plt.show()
+
+    #####################################
+    #      GENETIC ALGO PLOTS
+    ####################################
+
+def generation_plot(pop_scores, best_scores, n):
+    plt.title(f"Generation {n}")
+    plt.xlabel("ULP calls")
+    plt.ylabel("Max Error")
+    plt.scatter([x[0] for x in pop_scores],
+                        [x[1] for x in pop_scores])
+    plt.scatter([x[0] for x in best_scores],
+                        [x[1] for x in best_scores],
+                        marker = '*')
+    plt.show()
