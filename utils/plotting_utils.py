@@ -377,11 +377,11 @@ def q_error_distributions(Ys, Xmax, fname=None):
 
     plt.show()
 
-    #####################################
-    #      GENETIC ALGO PLOTS
-    ####################################
+#####################################
+#      GENETIC ALGO PLOTS
+####################################
 
-def generation_plot(pop_scores, best_scores, n):
+def generation_plot(pop_scores, best_scores, n, full_err):
     plt.title(f"Generation {n}")
     plt.xlabel("ULP calls")
     plt.ylabel("Max Error")
@@ -390,4 +390,9 @@ def generation_plot(pop_scores, best_scores, n):
     plt.scatter([x[0] for x in best_scores],
                         [x[1] for x in best_scores],
                         marker = '*')
+    plt.axhline(y=full_err, c='tab:grey', linestyle=':')
     plt.show()
+
+#####################################
+#      Grid Search
+####################################

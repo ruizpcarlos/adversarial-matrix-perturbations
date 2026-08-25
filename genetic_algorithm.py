@@ -15,7 +15,6 @@ from utils.utils import save_dict_to_pickle
 from utils.plotting_utils import generation_plot
 
 
-
 class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def __init__(self,
@@ -241,7 +240,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         self.population.append(new_gen)
         self.fitness.append(gen_error)
-        self.ulp_calls.append(self.max_calls*self.compute_max_err.call_count)
+        self.ulp_calls.append(self.compute_max_err.call_count)
 
         # Sort and trim to keep pop_size individuals
         self.sort_generation()
@@ -250,9 +249,10 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     def generation_plot(self, gen=-1):
         scores = self.fitness[gen]
         best   = scores[:self.mating_pop]
-        n_gen   = len(self.population)
+        n_gen  = len(self.population)
+        y_line = self.full_perturbation_err
 
-        generation_plot(scores, best, n_gen)
+        generation_plot(scores, best, n_gen, y_line)
     
 
     def search(self, early_stopping=True, verbose=False, print_plots = False):
@@ -321,7 +321,7 @@ if __name__ == "__main__":
     seed       = 420
 
     random.seed(seed)
-
+    torch.manual_seed(seed)
     # ------------------------------------------------------------------
     # EXPERIMENT INPUTS
     # ------------------------------------------------------------------
@@ -356,19 +356,19 @@ if __name__ == "__main__":
     results = []
     fname   = f"grid_search_{model_name}_{seed}.pkl"
 
-    pbar = tqdm(list(itertools.product(pop_sizes, q_values)))
-    for pop_size, q in pbar:
-        pbar.set_description(f"Running test for pop_size={pop_size}, q={q:.2f}")
+    for pop_size, q in itertools.product(pop_sizes, q_values):
+        print(f"Running test for pop_size={pop_size}, q={q:.2f}")
 
         # n_generations must satisfy: n_generations * pop_size <= c
         n_generations = max(1, c // pop_size)
 
-        run_errs   = []
-        run_calls  = []
-        run_times  = []
-        run_gens   = []
+        run_errs      = []
+        run_calls     = []
+        run_times     = []
+        run_gens      = []
+        run_err_ratio = []
 
-        for trial in range(n_test):
+        for trial in tqdm(range(n_test)):
             X_test     = X[trial]
             target_err = targets[trial]
 
@@ -389,28 +389,33 @@ if __name__ == "__main__":
 
             best_calls, best_err = ga.fitness[-1][0]
 
+            err_pct = abs(best_err)/target_err
+
             run_errs.append(abs(best_err))
-            run_calls.append(best_calls)
+            run_err_ratio.append(err_pct)          
+            run_calls.append(ga.ulp_calls[-1])
             run_times.append(elapsed)
             run_gens.append(ga.n_generations)
 
             print(f"pop_size={pop_size:>4} | q={q:>5.2f} | trial={trial+1}/{n_test} | "
                   f"gens={ga.n_generations:>3} | "
-                  f"best_err={abs(best_err):.4e} | "
+                  f"best_err={abs(best_err):.4e} ({100*err_pct:.2f}%) | "
                   f"ulp_calls={best_calls:>6} | "
                   f"time={elapsed:.2f}s")
 
-        run_errs    = np.array(run_errs)
-        success_pct = (run_errs >= target_err).sum()/n_test
+        run_errs      = np.array(run_errs)
+        run_err_ratio = np.array(run_err_ratio)
+        success_pct   = (run_errs >= target_err).sum()/n_test
 
         results.append({
             "pop_size":       pop_size,
             "p":              q,
             "n_test":         n_test,
-            "target_err":     target_err, 
+            "target_err":     target_err,
+            # "mean_err":       run_errs.mean(),
             "std_err":        run_errs.std(),
-            "max_err":        run_errs.max(),
             "success_pct":    success_pct,
+            "mean_err_pct":   run_err_ratio.mean(),
             "err_dist":       run_errs,
             "mean_ulp_calls": float(np.mean(run_calls)),
             "mean_time_s":    float(np.mean(run_times)),
@@ -426,18 +431,19 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Best configuration (highest mean max error achieved)
     # ------------------------------------------------------------------
-    best = max(results, key=lambda r: r["mean_err"])
+    best = max(results, key=lambda r: r["mean_err_pct"])
     print("Best configuration:")
     print(f"  pop_size = {best['pop_size']}, q = {best['q']} "
-          f"-> {(100*success_pct):.2f}% success w/ mean_err = {best['mean_err']:.4e} (std = {best['std_err']:.4e}) "
+          f"-> {(100*success_pct):.2f}% success w/ mean_err = {best['mean_err_pct']:.4e}"
+          f" (std = {best['std_err']:.4e}) "
           f"over {n_test} trials "
           f"(mean ulp_calls = {best['mean_ulp_calls']:.0f}, "
           f"mean time = {best['mean_time_s']:.2f}s)")
 
     # ------------------------------------------------------------------
-    # Heatmap of mean best error over the (pop_size, p) grid
+    # Heatmap of mean best error over the (pop_size, q) grid
     # ------------------------------------------------------------------
-    err_grid = np.array([r["mean_err"] for r in results]).reshape(
+    err_grid = np.array([r["mean_err_pct"] for r in results]).reshape(
         len(pop_sizes), len(q_values)
     )
 
@@ -446,8 +452,24 @@ if __name__ == "__main__":
     plt.colorbar(label=f"Mean best max error (n_test={n_test})")
     plt.xticks(range(len(q_values)), q_values)
     plt.yticks(range(len(pop_sizes)), pop_sizes)
-    plt.xlabel("p (perturbation fraction)")
-    plt.ylabel("pop_size")
+    plt.xlabel("q (perturbation %)")
+    plt.ylabel("Population Size (P)")
+    plt.title("Grid search: pop_size vs q")
+    plt.tight_layout()
+    plt.show()
+
+
+    succcess_grid = np.array([r["success_pct"] for r in results]).reshape(
+            len(pop_sizes), len(q_values)
+        )
+
+    plt.figure()
+    plt.imshow(succcess_grid, aspect="auto", origin="lower")
+    plt.colorbar(label=f"Success percentage (n_test={n_test})")
+    plt.xticks(range(len(q_values)), q_values)
+    plt.yticks(range(len(pop_sizes)), pop_sizes)
+    plt.xlabel("q (perturbation %)")
+    plt.ylabel("Population Size (P)")
     plt.title("Grid search: pop_size vs q")
     plt.tight_layout()
     plt.show()
