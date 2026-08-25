@@ -26,7 +26,8 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 max_calls = 256,
                 n_generations = 10, 
                 pop_size=50, 
-                mating_pct=0.2):
+                mating_pct=0.2,
+                deterministic_selection:bool=False):
 
         super().__init__(input_matrix, func, c, max_calls)
 
@@ -40,14 +41,16 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct*pop_size)
 
+        self.deterministic_selection = deterministic_selection
+
         self.population = []
         self.fitness    = []
         self.ulp_calls  = [0]
          
-        if self.population is None:
-            self.population = []
-            self.fitness    = []
-            self.init_population()
+        # if self.population is None:
+        #     self.population = []
+        #     self.fitness    = []
+        #     self.init_population()
 
     def init_population(self):
 
@@ -202,7 +205,9 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     def mating_probabilities(self):
 
         # Computes mating probabilities for last generation
-        w_probs = [abs(err[1]) for err in self.fitness[-1]][:self.mating_pop]
+        w_probs = [abs(err[1]) for err in self.fitness[-1]]
+        if self.deterministic_selection:
+            w_probs = w_probs[:self.mating_pop]
         w_probs = np.array(w_probs)
         probs   = w_probs/w_probs.sum()
         return probs
@@ -210,9 +215,14 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     def evolve_generation(self):
 
         # Score and select the mating pool
-        mating_pool   = self.population[-1][:self.mating_pop]
-        mating_scores = self.fitness[-1][:self.mating_pop]
-        mating_prob   = self.mating_probabilities()
+        if self.deterministic_selection:
+            mating_pool   = self.population[-1][:self.mating_pop]
+            mating_scores = self.fitness[-1][:self.mating_pop]
+        else:
+            mating_pool   = self.population[-1]
+            mating_scores = self.fitness[-1]
+                    
+        mating_prob = self.mating_probabilities()
 
         # Generate offspring from all pairs in the mating pool
         n_pairs = self.pop_size // 2
@@ -337,6 +347,7 @@ if __name__ == "__main__":
     q_values  = [0.05, 0.1, 0.15, 0.2]
 
     targets = []
+    print(f"Computing target errors of the sample")
     for _x in X:
         targ_aux = AdvPerturbation(_x, W, c)
         err = targ_aux.full_perturbation_err
@@ -360,6 +371,8 @@ if __name__ == "__main__":
         for trial in range(n_test):
             X_test     = X[trial]
             target_err = targets[trial]
+
+            print(f"{trial+1} - Full matrix perturbation = {target_err:.4e}")
 
             ga = AdversarialGeneticAlgorithm(
                 input_matrix=X_test,
