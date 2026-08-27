@@ -4,16 +4,19 @@ import random
 import itertools
 import matplotlib.pyplot as plt
 import numpy as np
-
+import threading
 import torchvision.models as models
 
 # from torch.linalg import vector_norm, multi_dot
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
 from adv_matrix import AdvPerturbation
 from utils.utils import save_dict_to_pickle
 from utils.plotting_utils import generation_plot
 
+
+_call_lock = threading.Lock()
 
 class AdversarialGeneticAlgorithm(AdvPerturbation):
 
@@ -51,13 +54,22 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     def init_population(self):
 
         first_gen = [self._sample_entries(self._p) for _ in range(self.pop_size)]
-        gen_error = [self.compute_max_err(idx) for idx in first_gen]
+        # gen_error = [self.compute_max_err(idx) for idx in first_gen]
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            gen_error = list(ex.map(self._compute_max_err_threadsafe, first_gen))
 
         #
         self.population.append(first_gen)
         self.fitness.append(gen_error)
         self.sort_generation()
         self.ulp_calls.append(self.compute_max_err.call_count)
+
+
+    def _compute_max_err_threadsafe(self, idx):
+        result = self.compute_max_err.func(idx)   # bypass CallTracker's own increment (not thread-safe as-is)
+        with _call_lock:
+            self.compute_max_err.call_count += 1
+        return result   
 
 
     def sort_generation(self, gen=-1):
@@ -75,6 +87,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         self.population[gen] = list(current_gen)
         self.fitness[gen]    = list(gen_fitness)
+
 
     ################################
     ###    MUTATION FUNCTIONS    ###
@@ -360,7 +373,7 @@ if __name__ == "__main__":
         run_gens      = []
         run_err_ratio = []
 
-        for trial in tqdm(range(n_test)):
+        for trial in range(n_test):
             X_test     = X[trial]
             target_err = targets[trial]
 
@@ -390,11 +403,11 @@ if __name__ == "__main__":
             run_times.append(elapsed)
             run_gens.append(ga.n_generations)
 
-            print(f"pop_size={pop_size:>4} | q={q:>5.2f} | trial={trial+1}/{n_test} | "
-                  f"gens={ga.n_generations:>3} | "
+            print(# f"pop_size={pop_size:>4} | q={q:>5.2f} |"
+                  f" trial={trial+1}/{n_test} | gens={ga.n_generations:>3} | "
                   f"best_err={abs(best_err):.4e} ({100*err_pct:.2f}%) | "
                   f"ulp_calls={best_calls:>6} | "
-                  f"n calls = {ga.ulp_calls[-1]} ({elapsed:.2f}s)")
+                  f"n calls = {ga.ulp_calls[-1]} ({100*(ga.ulp_calls[-1]/c):.2f}% of call budget)  in {elapsed:.2f}s")
 
         run_errs      = np.array(run_errs)
         run_err_ratio = np.array(run_err_ratio)
