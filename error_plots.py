@@ -22,6 +22,7 @@ class deltaNormPlots:
     def __init__(self, n_latent: int, seed:int):
 
         random.seed(seed)
+        torch.manual_seed(seed)
 
         self.n_latent = n_latent
 
@@ -107,6 +108,7 @@ class errorPlots:
     def __init__(self, model_name: str, seed:int, n_samples:int=1):
     
         random.seed(seed)
+        torch.manual_seed(seed)
     
         self.INFTY  = torch.tensor(torch.inf)
         self.DTYPES = [torch.bfloat16, torch.float32]
@@ -444,7 +446,7 @@ if __name__=="__main__":
 
     # Print CPU and GPU DATA
     print_sys_specs()
-
+    
     # GROWTH OF DELTA
     delta_plots = deltaNormPlots(n_latent=LATENT_DIM, seed=seed)
 
