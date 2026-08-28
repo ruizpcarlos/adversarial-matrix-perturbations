@@ -239,7 +239,11 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                         ))
 
         new_gen   = offspring + mating_pool
-        gen_error = [self.compute_max_err(idx) for idx in offspring] + mating_scores
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            gen_error = list(ex.map(self._compute_max_err_threadsafe, offspring))
+
+        gen_error = gen_error + mating_scores
 
         self.population.append(new_gen)
         self.fitness.append(gen_error)
@@ -261,11 +265,14 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
     def search(self, early_stopping=True, verbose=False, print_plots = False):
 
         self.compute_max_err.reset()
+
+        start_t = time.time()
         self.init_population()
+        total_t = time.time()-start_t
 
         if verbose:
             aux = self.fitness[0][0]
-            print(f"Initialized 1st generation -- ",
+            print(f"Initialized 1st generation ({total_t:.3f}s)-- ",
                   f"max error = {aux[1]:.3e}, ",
                   f"ulp calls = {aux[0]}")
 
