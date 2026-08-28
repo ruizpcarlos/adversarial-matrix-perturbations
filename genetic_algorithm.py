@@ -422,7 +422,7 @@ if __name__ == "__main__":
 
         results.append({
             "pop_size":       pop_size,
-            "p":              q,
+            "q":              q,
             "n_test":         n_test,
             "target_err":     target_err,
             # "mean_err":       run_errs.mean(),
