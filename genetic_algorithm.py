@@ -327,7 +327,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
 if __name__ == "__main__":
 
-    n_test = sys.argv[1]   # number of repeated runs per (pop_size, p) configuration
+    n_test = int(sys.argv[1])   # number of repeated runs per (pop_size, p) configuration
     data   = sys.argv[2]
 
     model_name = "ResNet"
@@ -355,8 +355,9 @@ if __name__ == "__main__":
     X_img = torch.randn(n_test, 1, 3, 224, 224,
                         dtype=dtype)
 
-    MAX_CALLS = 128
-    c         = 1000  # total budget of calls to compute_max_err
+    MAX_CALLS      = 128
+    c              = 1000  # total budget of calls to compute_max_err
+    early_stopping = (not data.upper().startswith("BF")) # Deactivate early stopping for bf16
 
     # ------------------------------------------------------------------
     # Grid search over population size and perturbation fraction
@@ -367,7 +368,7 @@ if __name__ == "__main__":
     q_values  = [0.1]
         
     targets = []
-    print(f"Computing target errors of the sample")
+    print(f"Computing target errors of the sample ({dtype})")
     for _x in X:
         targ_aux = AdvPerturbation(_x, W, c)
         err = targ_aux.full_perturbation_err
@@ -405,7 +406,7 @@ if __name__ == "__main__":
             )
 
             start_t = time.time()
-            ga.search(early_stopping=True, verbose=False, print_plots=False)
+            ga.search(early_stopping=early_stopping, verbose=False, print_plots=False)
             elapsed = time.time() - start_t
 
             best_calls, best_err = ga.fitness[-1][0]
