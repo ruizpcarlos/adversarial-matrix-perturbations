@@ -1,4 +1,5 @@
 import time
+import sys
 import torch
 import random
 import itertools
@@ -326,9 +327,12 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
 if __name__ == "__main__":
 
-    n_test     = 1   # number of repeated runs per (pop_size, p) configuration
+    n_test = sys.argv[1]   # number of repeated runs per (pop_size, p) configuration
+    data   = sys.argv[2]
+
     model_name = "ResNet"
     seed       = 420
+    dtype      = torch.bfloat16 if data.upper().startswith("BF") else torch.float32
 
     random.seed(seed)
     torch.manual_seed(seed)
@@ -337,16 +341,19 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     if model_name.upper().startswith("EFF"):
         model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.classifier[1].weight.data, 0, 1)
+        W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
     else:
         model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.fc.weight.data, 0, 1)
+        W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
                 
     n_latent = W.shape[0]
 
-    W0    = torch.randn(n_latent, n_latent)  
-    X     = torch.randn(n_test, n_latent, n_latent)
-    X_img = torch.randn(n_test, 1, 3, 224, 224)
+    W0    = torch.randn(n_latent, n_latent,
+                        dtype=dtype)  
+    X     = torch.randn(n_test, n_latent, n_latent,
+                        dtype=dtype)
+    X_img = torch.randn(n_test, 1, 3, 224, 224,
+                        dtype=dtype)
 
     MAX_CALLS = 128
     c         = 1000  # total budget of calls to compute_max_err
@@ -354,10 +361,11 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Grid search over population size and perturbation fraction
     # ------------------------------------------------------------------
+    # pop_sizes = [20, 50, 80, 100]
+    # q_values  = [0.05, 0.1, 0.15, 0.2]
     pop_sizes = [20, 50, 80, 100]
-    q_values  = [0.05, 0.1, 0.15, 0.2]
     q_values  = [0.1]
-
+        
     targets = []
     print(f"Computing target errors of the sample")
     for _x in X:
@@ -438,7 +446,7 @@ if __name__ == "__main__":
 
         save_dict_to_pickle(results, filename=fname)
 
-        print(f"  -> max_err={run_errs.max():.4e} (std={run_errs.std():.4e}) "
+        print(f"  -> mean err% ={run_err_ratio.mean():.4e} (std={run_errs.std():.4e}) "
               f"{(100*success_pct):.2f}% success over {n_test} trials\n")
 
     # ------------------------------------------------------------------
