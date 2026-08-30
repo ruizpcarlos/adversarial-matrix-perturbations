@@ -39,6 +39,8 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self._p = int(q*input_matrix.numel())
                 
         self.n_generations = n_generations
+        # self.stop_counter  = n_generations//2
+        self.stop_counter  = 20
         self.pop_size      = pop_size
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct*pop_size)
@@ -286,8 +288,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         while (self.compute_max_err.call_count <= self.c 
                and j<self.n_generations
-               # and pop_set > 1
-               and counter < 7):
+               and counter<self.stop_counter):
 
             start_t = time.time()
             self.evolve_generation()
@@ -355,27 +356,25 @@ if __name__ == "__main__":
     X_img = torch.randn(n_test, 1, 3, 224, 224,
                         dtype=dtype)
 
-    MAX_CALLS      = 128
+    MAX_CALLS      = 32 # if data.upper().startswith("BF") else 128
     c              = 1000  # total budget of calls to compute_max_err
     early_stopping = (not data.upper().startswith("BF")) # Deactivate early stopping for bf16
 
     # ------------------------------------------------------------------
     # Grid search over population size and perturbation fraction
     # ------------------------------------------------------------------
-    # pop_sizes = [20, 50, 80, 100]
-    # q_values  = [0.05, 0.1, 0.15, 0.2]
-    pop_sizes = [20, 50, 80, 100]
-    q_values  = [0.1]
+    pop_sizes = [20, 50, 100]
+    q_values  = [0.05, 0.1]
         
     targets = []
     print(f"Computing target errors of the sample ({dtype})")
     for _x in X:
-        targ_aux = AdvPerturbation(_x, W, c)
+        targ_aux = AdvPerturbation(_x, W, c, max_calls=MAX_CALLS)
         err = targ_aux.full_perturbation_err
         targets.append(err)
 
     results = []
-    fname   = f"grid_search_{model_name}_{seed}.pkl"
+    fname   = f"grid_search_{model_name}_{data}_{seed}.pkl"
 
     for pop_size, q in itertools.product(pop_sizes, q_values):
         print(f"Running test for pop_size={pop_size}, q={q:.2f}")
@@ -406,7 +405,7 @@ if __name__ == "__main__":
             )
 
             start_t = time.time()
-            ga.search(early_stopping=early_stopping, verbose=False, print_plots=False)
+            ga.search(early_stopping=True, verbose=False, print_plots=False)
             elapsed = time.time() - start_t
 
             best_calls, best_err = ga.fitness[-1][0]
@@ -427,13 +426,13 @@ if __name__ == "__main__":
 
         run_errs      = np.array(run_errs)
         run_err_ratio = np.array(run_err_ratio)
-        success_pct   = (run_errs >= target_err).sum()/n_test
+        success_pct   = (run_err_ratio >= 1).sum()/n_test
 
         results.append({
             "pop_size":       pop_size,
             "q":              q,
             "n_test":         n_test,
-            "target_err":     target_err,
+            "target_err":     np.array(targets),
             # "mean_err":       run_errs.mean(),
             "std_err":        run_errs.std(),
             "success_pct":    success_pct,
@@ -462,36 +461,36 @@ if __name__ == "__main__":
           f"(mean ulp_calls = {best['mean_ulp_calls']:.0f}, "
           f"mean time = {best['mean_time_s']:.2f}s)")
 
-    # ------------------------------------------------------------------
-    # Heatmap of mean best error over the (pop_size, q) grid
-    # ------------------------------------------------------------------
-    err_grid = np.array([r["mean_err_pct"] for r in results]).reshape(
-        len(pop_sizes), len(q_values)
-    )
+    # # ------------------------------------------------------------------
+    # # Heatmap of mean best error over the (pop_size, q) grid
+    # # ------------------------------------------------------------------
+    # err_grid = np.array([r["mean_err_pct"] for r in results]).reshape(
+    #     len(pop_sizes), len(q_values)
+    # )
 
-    plt.figure()
-    plt.imshow(err_grid, aspect="auto", origin="lower")
-    plt.colorbar(label=f"Mean best max error (n_test={n_test})")
-    plt.xticks(range(len(q_values)), q_values)
-    plt.yticks(range(len(pop_sizes)), pop_sizes)
-    plt.xlabel("q (perturbation %)")
-    plt.ylabel("Population Size (P)")
-    plt.title("Grid search: pop_size vs q")
-    plt.tight_layout()
-    plt.show()
+    # plt.figure()
+    # plt.imshow(err_grid, aspect="auto", origin="lower")
+    # plt.colorbar(label=f"Mean best max error (n_test={n_test})")
+    # plt.xticks(range(len(q_values)), q_values)
+    # plt.yticks(range(len(pop_sizes)), pop_sizes)
+    # plt.xlabel("q (perturbation %)")
+    # plt.ylabel("Population Size (P)")
+    # plt.title("Grid search: pop_size vs q")
+    # plt.tight_layout()
+    # plt.show()
 
 
-    succcess_grid = np.array([r["success_pct"] for r in results]).reshape(
-            len(pop_sizes), len(q_values)
-        )
+    # succcess_grid = np.array([r["success_pct"] for r in results]).reshape(
+    #         len(pop_sizes), len(q_values)
+    #     )
 
-    plt.figure()
-    plt.imshow(succcess_grid, aspect="auto", origin="lower")
-    plt.colorbar(label=f"Success percentage (n_test={n_test})")
-    plt.xticks(range(len(q_values)), q_values)
-    plt.yticks(range(len(pop_sizes)), pop_sizes)
-    plt.xlabel("q (perturbation %)")
-    plt.ylabel("Population Size (P)")
-    plt.title("Grid search: pop_size vs q")
-    plt.tight_layout()
-    plt.show()
+    # plt.figure()
+    # plt.imshow(succcess_grid, aspect="auto", origin="lower")
+    # plt.colorbar(label=f"Success percentage (n_test={n_test})")
+    # plt.xticks(range(len(q_values)), q_values)
+    # plt.yticks(range(len(pop_sizes)), pop_sizes)
+    # plt.xlabel("q (perturbation %)")
+    # plt.ylabel("Population Size (P)")
+    # plt.title("Grid search: pop_size vs q")
+    # plt.tight_layout()
+    # plt.show()
