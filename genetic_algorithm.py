@@ -3,14 +3,11 @@ import sys
 import torch
 import random
 import itertools
-import matplotlib.pyplot as plt
 import numpy as np
 import threading
 import torchvision.models as models
 
-# from torch.linalg import vector_norm, multi_dot
 from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
 
 from adv_matrix import AdvPerturbation
 from utils.utils import save_dict_to_pickle
