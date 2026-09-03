@@ -47,7 +47,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         return self.geneset_to_indices(x1)
 
 
-    def init_temp(self, target_prob=0.9, n_samples=100, verbose=False):
+    def init_temp(self, target_prob=0.9, n_samples=100, tie_penalty=1e-8, verbose=False):
         """
         Calculates a initial temperature that will allow q% of 
         'worse' solutions to be accepted
@@ -55,7 +55,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
         obj_delta = np.zeros(n_samples)
         idx       = self._sample_entries(self._q)
-        _, err    = self.compute_max_err(idx)
+        n_calls, err    = self.compute_max_err(idx)
 
         if verbose:
             pbar = tqdm(range(n_samples)) 
@@ -64,14 +64,19 @@ class SimulatedAnnealingSearch(AdvPerturbation):
             pbar = range(n_samples)
 
         for i in pbar:
-            idx     = self.generate_new_sol(idx)
-            _, _err = self.compute_max_err(idx)
+            idx  = self.generate_new_sol(idx)
 
-            obj_delta[i] = err-_err
+            _n_c, _err   = self.compute_max_err(idx)
+            delta_err    = err-_err
+            delta_calls  = n_calls - _n_c
+            obj_delta[i] = delta_err - tie_penalty * delta_calls
 
-            err = _err
+            err     = _err
+            n_calls = _n_c
 
-        T0  = -np.mean(obj_delta[obj_delta>0])/np.log(target_prob)
+        worse_moves = obj_delta[obj_delta<0]
+
+        T0  = -np.mean(worse_moves)/np.log(target_prob)
 
         self.T0 = T0
         # return T0
@@ -328,7 +333,7 @@ if __name__ == "__main__":
     results = []
     fname   = f"sa_gridsearch_{model_name}_{data}_{seed}.pkl"
 
-    targets      = {}
+    targets      = []
     sa_instances = {}
 
     print(f"Computing target errors of the sample ({dtype})")
@@ -341,10 +346,9 @@ if __name__ == "__main__":
                                             q=q,
                                             max_calls=MAX_CALLS)
             targ_aux.init_temp(verbose=False)
-            err = targ_aux.full_perturbation_err
-
             sa_instances.update({(j, q) : targ_aux})
-            targets.update({(j, q) : err})
+        err = targ_aux.full_perturbation_err
+        targets.append(err)
 
     for ab, q in itertools.product(params, q_values):
         print(f"Running test for params={ab}, q={q:.2f}")
