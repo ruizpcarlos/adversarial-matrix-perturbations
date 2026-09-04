@@ -167,7 +167,7 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
     # Save after every sample so partial progress isn't lost on a crash.
     save_dict_to_pickle(results, results_file)
 
-torch.save(y_hist, "err_dist.pt")
+torch.save(y_hist, f"err_dist_{data}.pt")
 
 print(f"Saved results for {n_samples} samples across "
       f"{len(results)} algorithms to {results_file}")
