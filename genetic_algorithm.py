@@ -36,8 +36,8 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self._p = int(q*input_matrix.numel())
                 
         self.n_generations = n_generations
-        # self.stop_counter  = n_generations//2
-        self.stop_counter  = 20
+        self.stop_counter  = max (n_generations//2, 10)
+        # self.stop_counter  = 20
         self.pop_size      = pop_size
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct*pop_size)

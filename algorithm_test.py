@@ -1,166 +1,173 @@
+import sys
+import time
+import json
+
 import random
 import torch
-import sys
-import pickle
 import numpy as np
 import torchvision.models as models
 
 from scipy.stats import mannwhitneyu
 from tqdm import tqdm
 
-from adv_matrix import AdvPerturbation, _nextafter
+from adv_matrix import AdvPerturbation #,_nextafter
 from simulated_annealing import SimulatedAnnealingSearch
-from evol_algorithms import AdversarialGeneticAlgorithm
+from genetic_algorithm import AdversarialGeneticAlgorithm
 from utils.utils import save_dict_to_pickle #plot_max, annealing_plot, track_evol_, pad_to_match
 
-_model    = sys.argv[1]
-_data     = sys.argv[2]
-N_samples = int(sys.argv[3])
-seed      = int(sys.argv[4])
-random.seed(seed)
+# ----------------------------------------------------------------------
+# CLI args
+# ----------------------------------------------------------------------
+n_samples = int(sys.argv[1])
+data      = sys.argv[2]
 
-dtype    = torch.bfloat16 if _data.startswith("bfloat") else torch.get_default_dtype()
-type_aux = f"{dtype}".split('.')[1]
+SEED       = 161
+model_name = "ResNet"
 
-if _model.upper().startswith("EFF"):
-    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
-    # model.eval()
+random.seed(SEED)
+torch.manual_seed(SEED)
+
+dtype = torch.bfloat16 if data.upper().startswith("BF") else torch.get_default_dtype()
+
+# ----------------------------------------------------------------------
+# Model / weight matrix setup
+# ----------------------------------------------------------------------
+if model_name.upper().startswith("EFF"):
+    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
     W = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
 else:
-    model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1)
-    # model.eval()
+    model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1).eval()
     W = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
 
-N_INPUT  = 1
-SCALE    = -2
-_entries = 10.0**SCALE
 n_latent = W.shape[0]
-M        = _entries*torch.randn(N_INPUT, n_latent, dtype=dtype)
+n_input  = n_latent
 weights  = W
 
-p = 150
-max_calls = 256
-print(f"MAX ULP CALLS = {p*max_calls}")
+MAX_CALLS = 32
+C = 1_000
 
-results      = {}
-alg_calls    = {}
-max_trackers = {}
+q = 0.1
 
-##############################
-#     SIMULATED ANNEALING
-##############################
-sim_anneal =  SimulatedAnnealingSearch(M, weights,
-                                       p,
-                                       max_calls=max_calls)
-# Optimization params
-L = 5
-c = 1e-6
-cooling_rates = [0.8, 0.85, 0.9]
+# ----------------------------------------------------------------------
+# Algorithm configurations
+# ----------------------------------------------------------------------
+L0            = 5
+sa_params     = list(zip([0.8, 0.85], [1.04, 1.035]))  # (alpha, beta)
+ga_pop_sizes  = [50, 100]
 
-for rate in cooling_rates:
-    key_str = f"SA_{int(100*rate)}"
+results_file = f"results_{model_name}_{data}_{SEED}.pkl"
 
-    results[key_str] = []
-    _calls           = []
+# results[algorithm_name] -> list of per-sample records
+results = {}
+y_hist = torch.tensor([])
 
-    print(f"Running {key_str}")
-    for _ in tqdm(range(N_samples)):
-        y, _, aux_calls = sim_anneal.search(c, L, cooling_r = rate)
-        n_calls         = aux_calls[-1]
+def record(algorithm_name:str, 
+           sample_idx:int, 
+           elapsed:float,
+           target:float,
+           results_data: np.array, 
+           final_result:float, 
+           calls:list,
+           budget:int):
+    results.setdefault(algorithm_name, []).append({
+        "sample":        sample_idx,
+        "time_sec":      elapsed,
+        "data":          results_data, 
+        "max_err":       final_result,
+        "max_err_pct" :  final_result/target,
+        "calls":         calls,
+        "budget_calls":  budget,
+    })
 
-        results[key_str].append(
-                                y.max().item()
-                                )
-        _calls.append(n_calls)
 
-    alg_calls[key_str] = np.mean(_calls)
+# def save_results():
+#     with open(results_file, "w") as f:
+#         json.dump(results, f, indent=2)
 
-res_filename   = f"results_{type_aux}_{seed}.pkl"
-calls_filename = f"alg_calls_{type_aux}_{seed}.pkl"
 
-save_dict_to_pickle(results, res_filename)
-save_dict_to_pickle(alg_calls, calls_filename)
+# ----------------------------------------------------------------------
+# Main sampling loop
+# ----------------------------------------------------------------------
+for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
 
-########################################################
-###         GENETIC ALGORITHMS
-########################################################
-mating_pct = 0.2
-pop_sizes  = [25, 50, 76]
+    X = torch.randn(n_input, n_latent, dtype=dtype)
 
-for pop_ in pop_sizes:
+    # ---------------- RANDOM (benchmark) ----------------
+    algorithm_name = "RANDOM"
+    benchmark  = AdvPerturbation(X, weights,
+                                c=C,
+                                max_calls=MAX_CALLS)
+    target_err = benchmark.full_perturbation_err
 
-    key_str = f"GA_{pop_}"
-
-    results[key_str] = []
-    _calls = []
-
-    print(f"Running {key_str}")
-    for _ in tqdm(range(N_samples)):
-
-        gen_algorithm = AdversarialGeneticAlgorithm(M, weights, p,
-                                            max_calls=max_calls,
-                                            pop_size=pop_,
-                                            mating_pct=mating_pct
-                                            )
-
-        gen_algorithm.search()
-
-        results[key_str].append(
-                                gen_algorithm.fitness[-1][0][1]
-                                )
-
-        _calls.append(n_calls)
-
-    alg_calls[key_str] = np.mean(_calls)
-
-save_dict_to_pickle(results, res_filename)
-save_dict_to_pickle(alg_calls, calls_filename)
-
-########################################################
-###        RANDOM PERTURBATION (BENCHMARK)
-########################################################
-key_str = f"RANDOM"
-
-results[key_str] = []
-_calls           = [] 
-y_hist           = torch.Tensor([])
-
-print(f"Running {key_str}")
-benchmark = AdvPerturbation(M, weights, p, max_calls=max_calls)
-for _ in tqdm(range(N_samples)):
-
-    _nextafter.reset()
-    y, idx = benchmark.random_perturbation()
-    y_hist = torch.cat([y_hist, y], dim=1)
+    print(f"Running benchmark")
+    start_t = time.time()
+    y, idx  = benchmark.random_perturbation()
+    elapsed = time.time() - start_t
 
     max_err, _ = torch.max(torch.abs(y), dim=1)
     max_err = max_err.item()
+    budget = C
 
-    results[key_str].append(max_err)
-    _calls.append(_nextafter.call_count)
+    y_hist  = torch.cat([y_hist, y])
+        
+    record(algorithm_name, sample_idx, elapsed, target_err,
+           y, max_err,
+           [], budget)
 
-alg_calls[key_str] = np.mean(_calls)
+    # ---------------- SIMULATED ANNEALING ----------------
+    for alpha, beta in sa_params:
+        algorithm_name = f"SA_{int(100 * alpha)}"
+        sim_anneal = SimulatedAnnealingSearch(X, 
+                                              weights,
+                                              c=C, 
+                                              q=q, 
+                                              max_calls=MAX_CALLS)
 
-# Save results
-save_dict_to_pickle(results, res_filename)
-save_dict_to_pickle(alg_calls, calls_filename)
+        
+        print(f"Running {algorithm_name}")
+        start_t = time.time()
+        y, _, _, _ = sim_anneal.search(L0, 
+                                       alpha=alpha, 
+                                       beta=beta,
+                                       early_stopping=True)
+        elapsed = time.time() - start_t
 
-############################################
-##         MANN-WHITNEY U TEST
-############################################
-with open(res_filename, 'rb') as f:
-    results = pickle.load(f)
+        max_err = y[-1].item()
+        budget  = sim_anneal.ulp_calls[-1]
 
-algorithms = list(results.keys())[:-1]
-benchmark  = results['RANDOM']
+        record(algorithm_name, sample_idx, elapsed, target_err,
+               y, max_err,
+               sim_anneal.ulp_calls, 
+               budget)
 
-for a in algorithms:
-    _, pv = mannwhitneyu(results[a], benchmark,
-                         # method='exact',
-                         alternative='greater')
-    
-    calls_as_pct = 100*(alg_calls[a]/alg_calls['RANDOM']-1)
-    
-    print(f"{a}: p-value = {pv:.3e} -- ULP calls = {calls_as_pct:.2f}%")
+    # ---------------- GENETIC ALGORITHM ----------------
+    for pop_size in ga_pop_sizes:
+        algorithm_name = f"GA_{pop_size}"
+        gen_algorithm = AdversarialGeneticAlgorithm(
+            X, weights,
+            q=q,
+            c=C,
+            max_calls=MAX_CALLS,
+            pop_size=pop_size,
+        )
 
+        print(f"Running {algorithm_name}")
+        start_t = time.time()
+        gen_algorithm.search()
+        elapsed = time.time() - start_t
 
+        _, max_err = gen_algorithm.fitness[-1][0]
+        budget = gen_algorithm.ulp_calls[-1]
+        y = gen_algorithm.track_max()
+
+        record(algorithm_name, sample_idx, elapsed, target_err,
+               y, max_err, 
+               gen_algorithm.ulp_calls, budget)
+
+    # Save after every sample so partial progress isn't lost on a crash.
+    save_dict_to_pickle(results, results_file)
+
+torch.save(y_hist, "err_dist.pt")
+
+print(f"Saved results for {n_samples} samples across "
+      f"{len(results)} algorithms to {results_file}")

@@ -76,7 +76,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
         worse_moves = obj_delta[obj_delta<0]
 
-        T0  = -np.mean(worse_moves)/np.log(target_prob)
+        T0  = np.mean(worse_moves)/np.log(target_prob)
 
         self.T0 = T0
         # return T0
@@ -190,102 +190,8 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         Y = torch.Tensor(Y)#.unsqueeze(0)
         solution = (best_idx, best_calls)
 
-        return Y, solution, temps, accept_probs #, chains
+        return Y, solution, temps, accept_probs 
     
-
-    # def __search(self, L, *,
-    #            alpha = 0.8,
-    #            tol = 1e-12,
-    #            early_stopping = True,
-    #            #decay = "linear",
-    #            verbose=False):
-
-    #     self.compute_max_err.reset()
-    #     self.ulp_calls = [0]
-
-    #     k       = 0
-    #     T       = self.init_temp(verbose=verbose) # Initialize temperature
-    #     counter = 0
-                
-    #     iter_idx             = self._sample_entries(self._p)
-    #     iter_calls, iter_err = self.compute_max_err(iter_idx)
-
-    #     temps = [T]
-    #     Y = [iter_err]
-    #     self.ulp_calls.append(self.compute_max_err.call_count)
-
-    #     # Init the best sol
-    #     best_idx   = iter_idx
-    #     best_err   = iter_err
-    #     best_calls = iter_calls
-
-    #     if verbose:
-    #         print(f"Starting search w/ T0 = {T:.3e}")
-
-    #     while (T > tol and counter < 20 
-    #            and self.compute_max_err.call_count < self.c
-    #            ):
-
-    #         accept_prob = None
-
-    #         for _ in range(L):
-
-                
-    #             idx = self.generate_new_sol(iter_idx)
-    #             n_calls, _err = self.compute_max_err(idx)
-    #             _err = abs(_err)
-
-    #             if (_err > iter_err 
-    #                 # or (_err == iter_err and n_calls < iter_calls)
-    #                 ):
-    #                 iter_err   = _err
-    #                 iter_idx   = idx
-    #                 iter_calls = n_calls
-    #             else:
-    #                 delta = (_err - iter_err) / T
-    #                 accept_prob = np.exp(delta)
-    #                 if random.uniform(0, 1) < accept_prob:
-    #                     iter_err   = _err
-    #                     iter_idx   = idx
-    #                     iter_calls = n_calls
-
-    #             # Update the global best, independent of acceptance criteria above
-    #             if (_err > best_err 
-    #                 or (_err == best_err and n_calls < best_calls)
-    #                 ):
-    #                 best_idx   = idx
-    #                 best_err   = _err
-    #                 best_calls = n_calls
-    #                 # break
-
-    #         self.ulp_calls.append(self.compute_max_err.call_count)
-
-    #         Y.append(iter_err)
-
-    #         if early_stopping:
-    #             if best_err > getattr(self, "_last_best_err", -np.inf):
-    #                 counter = 0
-    #             else:
-    #                 counter += 1
-    #             self._last_best_err = best_err
-
-    #         k += 1
-    #         T = alpha*T
-                        
-    #         if verbose and k%10==0:
-    #             print(f"k = {k} ({counter}): ", 
-    #                 f"max error = {best_err:.3e} , ulp_calls = {best_calls} --",
-    #                 f"temp={T:.3e}, p<{accept_prob:.3e}")
-
-    #     if verbose:
-    #         print(f"Terminated in {len(Y)} iterations w/ error = {best_err:.4e}")
-
-    #     Y = torch.Tensor(Y).unsqueeze(0)
-
-    #     solution = (best_idx, best_calls)
-
-    #     return Y, solution, # self.ulp_calls
-
 
 
 if __name__ == "__main__":
