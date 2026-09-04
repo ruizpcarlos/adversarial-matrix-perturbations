@@ -36,7 +36,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self._p = int(q*input_matrix.numel())
                 
         self.n_generations = n_generations
-        self.stop_counter  = max (n_generations//2, 10)
+        self.stop_counter  = max(1+n_generations//2, 10)
         # self.stop_counter  = 20
         self.pop_size      = pop_size
         self.mating_pct    = mating_pct
@@ -88,116 +88,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.population[gen] = list(current_gen)
         self.fitness[gen]    = list(gen_fitness)
 
-
-    ################################
-    ###    MUTATION FUNCTIONS    ###
-    ################################
-    # @staticmethod
-    # def _strides(shape):
-    #     strides = [1] * len(shape)
-    #     for i in range(len(shape) - 2, -1, -1):
-    #         strides[i] = strides[i + 1] * shape[i + 1]
-    #     return strides
-
-    # def index_to_binary_string(self, *indices):
-    #     strides = self._strides(self.input_shape)
-    #     flat = torch.zeros_like(indices[0])
-    #     for idx, stride in zip(indices, strides):
-    #         flat = flat + idx * stride
-
-    #     total = 1
-    #     for d in self.input_shape:
-    #         total *= d
-
-    #     bits = torch.zeros(total, dtype=torch.int)
-    #     bits[flat] = 1
-    #     return ''.join(bits.numpy().astype(str))
-    
-    # def binary_string_to_index(self, s):
-    #     strides = self._strides(self.input_shape)
-    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
-
-    #     indices = []
-    #     remainder = flat.clone()
-    #     for stride in strides:
-    #         indices.append(remainder // stride)
-    #         remainder = remainder % stride
-    #     return tuple(indices)
-    
-    # def index_to_binary_string(self, rows, cols):
-    #     m = self.n_input
-    #     n = self.n_latent
-
-    #     flat = rows * n + cols          # row-major flat indices
-    #     bits = torch.zeros(m * n, dtype=torch.int)
-    #     bits[flat] = 1
-
-    #     return ''.join(bits.numpy().astype(str))
-
-    # def binary_string_to_index(self, s):
-    #     n = self.n_input
-    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
-    #     return flat % n, flat // n
-
-    # def crossover_uniform(self, s1, s2):
-
-    #     s1, s2 = list(s1), list(s2)
-
-    #     # Separate differing positions by type
-    #     zero_one = [i for i in range(len(s1)) if s1[i] == '0' and s2[i] == '1']
-    #     one_zero = [i for i in range(len(s1)) if s1[i] == '1' and s2[i] == '0']
-
-    #     # Swap the same number from each group
-    #     n_swap = min(len(zero_one), len(one_zero)) // 2
-    #     swap   = random.sample(zero_one, n_swap) + random.sample(one_zero, n_swap)
-
-    #     for i in swap:
-    #         s1[i], s2[i] = s2[i], s1[i]
-
-    #     return ''.join(s1), ''.join(s2)
-
-    # def mutate_binary_string(self, s, n_mutations=1):
-    #     s = list(s)
-    #     ones  = [i for i, b in enumerate(s) if b == '1']
-    #     zeros = [i for i, b in enumerate(s) if b == '0']
-
-    #     to_clear = random.sample(ones,  n_mutations)
-    #     to_set   = random.sample(zeros, n_mutations)
-
-    #     for i in to_clear: s[i] = '0'
-    #     for i in to_set:   s[i] = '1'
-    #     return ''.join(s)
-
-    # -------- replaces crossover_uniform --------
-    # def crossover_uniform(self, g1, g2):
-    #     s1, s2 = set(np.asarray(g1).tolist()), set(np.asarray(g2).tolist())
-
-    #     one_zero = list(s1 - s2)   # on in g1, off in g2
-    #     zero_one = list(s2 - s1)   # on in g2, off in g1
-
-    #     n_swap = min(len(zero_one), len(one_zero)) // 2
-    #     to_s1 = set(random.sample(zero_one, n_swap))  # move into s1
-    #     to_s2 = set(random.sample(one_zero, n_swap))  # move into s2
-
-    #     new_s1 = (s1 - to_s2) | to_s1
-    #     new_s2 = (s2 - to_s1) | to_s2
-
-    #     return (np.array(sorted(new_s1), dtype=np.int64),
-    #             np.array(sorted(new_s2), dtype=np.int64))
-
-    # def recombine(self, g1, g2):
-    #     o1, o2 = self.crossover_uniform(g1, g2)
-    #     o1 = self.mutate_geneset(o1)
-    #     o2 = self.mutate_geneset(o2)
-    #     return o1, o2
-    
-    # def recombine(self, s1, s2):
-
-    #     o1, o2 = self.crossover_uniform(s1, s2)
-    #     o1 = self.mutate_binary_string(o1)
-    #     o2 = self.mutate_binary_string(o2)
-
-    #     return o1, o2
 
     def create_offspring(self, parent1, parent2):
 
