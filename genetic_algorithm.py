@@ -1,5 +1,6 @@
 import time
 import sys
+import gc
 import torch
 import random
 import itertools
@@ -23,12 +24,14 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 func,
                 c, 
                 q,
-                max_calls = 256,
+                func_gpu=None,
+                max_calls = 32,
                 n_generations = 10, 
                 pop_size=50, 
-                mating_pct=0.4):
+                mating_pct=0.4,
+                keep_full_history=False):
 
-        super().__init__(input_matrix, func, c, max_calls)
+        super().__init__(input_matrix, func, c, func_gpu, max_calls)
 
         assert n_generations*pop_size <= c, "Invalid combination of parameters"
 
@@ -42,8 +45,19 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct*pop_size)
 
+        # evolve_generation()/mating_probabilities() only ever read the last
+        # entry of population/fitness. By default (keep_full_history=False)
+        # we drop older generations' full genesets/index arrays as soon as
+        # a new generation replaces them, keeping only a lightweight
+        # (ulp_calls, best_err) summary in self.history for track_max()/plots.
+        # Set keep_full_history=True if you need every generation's full
+        # population retained (uses much more memory, scales with
+        # n_generations * pop_size).
+        self.keep_full_history = keep_full_history
+
         self.population = []
         self.fitness    = []
+        self.history    = []   # [(ulp_calls, best_err), ...] one per generation
         self.ulp_calls  = [0]
          
         # if self.population is None:
@@ -63,7 +77,20 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.fitness.append(gen_error)
         self.sort_generation()
         self.ulp_calls.append(self.compute_max_err.call_count)
+        self._record_generation()
 
+
+    def _record_generation(self):
+        """Save this generation's (ulp_calls, best_err) summary, and — unless
+        keep_full_history is set — free the *previous* generation's full
+        population/fitness arrays, since nothing reads them again once the
+        next generation exists."""
+        best_calls, best_err = self.fitness[-1][0]
+        self.history.append((best_calls, best_err))
+
+        if not self.keep_full_history and len(self.population) > 1:
+            self.population[-2] = None
+            self.fitness[-2]    = None
 
     def _compute_max_err_threadsafe(self, idx):
         result = self.compute_max_err.func(idx)   # bypass CallTracker's own increment (not thread-safe as-is)
@@ -141,6 +168,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         # Sort and trim to keep pop_size individuals
         self.sort_generation()
+        self._record_generation()
 
 
     def generation_plot(self, gen=-1):
@@ -182,7 +210,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             total_t = time.time()-start_t
 
             n_calls, err         = self.fitness[-1][0]
-            prev_calls, prev_err = self.fitness[-2][0]
+            prev_calls, prev_err = self.history[-2]
             # pop_set              = len(set(self.fitness[-1]))
 
             j+=1
@@ -202,7 +230,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def track_max(self):
 
-        max_err = [0] + [abs(x[0][1]) for x in self.fitness]
+        max_err = [0] + [abs(err) for _, err in self.history]
         idx_aux = self.ulp_calls
         y_max   = torch.zeros(self.ulp_calls[-1])
 
@@ -210,6 +238,27 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             y_max[idx_aux[k]: idx_aux[k+1]] = max_err[k]
 
         return y_max.unsqueeze(0)
+
+    def release(self):
+        """Explicitly drop this instance's large in-memory state instead of
+        waiting on refcounting / the cyclic GC to reclaim it. Call this
+        (and then `del` the instance) once you're done with a search() run,
+        especially if you're creating many instances in a loop (e.g. one
+        per sample in a benchmarking script)."""
+        self.population.clear()
+        self.fitness.clear()
+        self.history.clear()
+
+        # Drop the GPU copy of the weights uploaded in AdvPerturbation's
+        # __init__, if present, and let PyTorch's caching allocator reclaim
+        # the underlying CUDA blocks.
+        if getattr(self, "weights_gpu", None) is not None:
+            del self.weights_gpu
+            self.weights_gpu = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        gc.collect()
 
 
 

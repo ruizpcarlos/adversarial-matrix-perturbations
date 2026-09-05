@@ -1,6 +1,7 @@
 import torch
 import random
 import copy
+# import threading
 import numpy as np
 import torch.nn as nn
 
@@ -104,8 +105,11 @@ def nextafter(x: torch.Tensor, offset: torch.Tensor):
 
 class AdvPerturbation:
 
-    def __init__(self, input_matrix: torch.Tensor, func, c,
-                 max_calls = 256):
+    def __init__(self, 
+                 input_matrix: torch.Tensor, 
+                 func, c,
+                 func_gpu = None,
+                 max_calls = 32):
 
         self.input_matrix = input_matrix
 
@@ -120,8 +124,9 @@ class AdvPerturbation:
                     f"dim {input_matrix.shape[-1]} != {func.shape[-2]}"
                     )
             self.weights     = [func]
+            self.weights_gpu = [func_gpu] if func_gpu is not None else [m.to("cuda") for m in self.weights]      
             self.nn          = None
-            # print("RUNNING W TENSOR MULTIPLICATION")
+            self.nn_gpu      = None
         elif isinstance(func, nn.Module):
             self.tensor_prod = False
             try:
@@ -131,25 +136,16 @@ class AdvPerturbation:
             except Exception as e:
                 raise ValueError(f"Input tensor is not a valid input for func: {e}")
             self.weights     = None
-            self.nn          = func#.eval()
-            self.tensor_prod = False
-            # print("RUNNING W CALLABLE TORCH MODULE")
-            
+            self.weights_gpu = None
+            self.nn          = func
+            self.nn_gpu      = copy.deepcopy(self.nn).eval().to("cuda")             
         else:
             raise TypeError(f"Received a {type(func)} as func: must be either torch.Tensor or nn.Module.")
                         
-        # # Dimension check using consecutive pairs
-        # _matrices = [input_matrix] + weights
-        # for a, b in zip(_matrices, _matrices[1:]):
-        #     if a.shape[-1] != b.shape[-2]:
-        #         raise ValueError(
-        #             f"Shape mismatch: {tuple(a.shape)} vs {tuple(b.shape)} — "
-        #             f"dim {a.shape[-1]} != {b.shape[-2]}"
-        #         )
         self.INFTY = torch.tensor(torch.inf)
         
-        self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
-        self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
+        # self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
+        # self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
 
         self.c = c # Controls the number of calls to compute_max_err
 

@@ -20,9 +20,10 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                  func,
                  c,
                  q,
-                 max_calls = 256):
+                 func_gpu=None,
+                 max_calls = 32):
 
-        super().__init__(input_matrix, func, c, max_calls)
+        super().__init__(input_matrix, func, c, func_gpu, max_calls)
 
         self.q  = q
         self._q = int(q*input_matrix.numel())
