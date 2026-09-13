@@ -5,12 +5,15 @@ import copy
 import numpy as np
 import torch.nn as nn
 
+from typing import Union, Optional, Tuple
 from tqdm import tqdm
 from torch.linalg import vector_norm
 from functools import cached_property, update_wrapper
 
 from utils.utils import product_err
 from utils.plotting_utils import plot_max
+
+FuncType = Union[torch.Tensor, nn.Module]
 
 class CallTracker:
     def __init__(self, func):
@@ -107,9 +110,11 @@ class AdvPerturbation:
 
     def __init__(self, 
                  input_matrix: torch.Tensor, 
-                 func, c,
-                 func_gpu = None,
-                 max_calls = 32):
+                 func: FuncType, 
+                 q:float,
+                 func_gpu: Optional[FuncType] = None,
+                 max_calls:int = 32,
+                 budget_calls: int = 1_000):
 
         self.input_matrix = input_matrix
 
@@ -141,13 +146,19 @@ class AdvPerturbation:
             self.nn_gpu      = copy.deepcopy(self.nn).eval().to("cuda")             
         else:
             raise TypeError(f"Received a {type(func)} as func: must be either torch.Tensor or nn.Module.")
+
+        if not 0 < q < 1:
+            raise ValueError(f"q must be in [0, 1], got {q}")
+        self.q  = q
+        self.n_perturbed = int(q*input_matrix.numel())
+                
                         
         self.INFTY = torch.tensor(torch.inf)
         
         # self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
         # self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
 
-        self.c = c # Controls the number of calls to compute_max_err
+        self.budget_calls = budget_calls # Controls the number of calls to compute_max_err
 
         self.input_shape = input_matrix.shape
         self.strides = self._strides(self.input_shape)
@@ -161,7 +172,7 @@ class AdvPerturbation:
             self.n_latent = input_matrix.shape[3] # Width
         
         self.max_calls   = max_calls
-        self.total_calls = self.c*max_calls
+        self.total_calls = self.budget_calls*max_calls
 
         # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
@@ -299,7 +310,7 @@ class AdvPerturbation:
         return torch.Tensor(y).unsqueeze(0), max_pert
     
     
-    def compute_max_err(self, indices=None):
+    def compute_max_err(self, indices: Optional[Tuple[torch.Tensor, ...]] = None) -> Tuple[int, float]:
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")

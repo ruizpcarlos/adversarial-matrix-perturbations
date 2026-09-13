@@ -131,9 +131,10 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
     # ---------------- RANDOM (benchmark) ----------------
     algorithm_name = "RANDOM"
     benchmark  = AdvPerturbation(X, func,
-                                c=C,
+                                q = q,
                                 func_gpu=func_gpu,
-                                max_calls=MAX_CALLS)
+                                max_calls=MAX_CALLS,
+                                budget_calls=C)
     target_err = benchmark.full_perturbation_err
 
     print(f"Running benchmark")
@@ -160,10 +161,10 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
         algorithm_name = f"SA_{int(100 * alpha)}"
         sim_anneal = SimulatedAnnealingSearch(X, 
                                               func,
-                                              func_gpu=func_gpu,
-                                              c=C, 
-                                              q=q, 
-                                              max_calls=MAX_CALLS)
+                                              q=q,
+                                              func_gpu=func_gpu, 
+                                              max_calls=MAX_CALLS,
+                                              budget_calls=C)
 
         
         print(f"Running {algorithm_name}")
@@ -188,10 +189,10 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
         algorithm_name = f"GA_{pop_size}"
         gen_algorithm = AdversarialGeneticAlgorithm(
             X, func,
-            func_gpu=func_gpu,
             q=q,
-            c=C,
+            func_gpu=func_gpu,
             max_calls=MAX_CALLS,
+            budget_calls=C,
             pop_size=pop_size,
         )
 

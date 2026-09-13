@@ -5,35 +5,35 @@ import itertools
 import torch
 import random
 import numpy as np
+
+from typing import Optional
 from tqdm import tqdm
 
 import torchvision.models as models
 
-from adv_matrix import AdvPerturbation
-from utils.utils import save_dict_to_pickle
+from adv_matrix import AdvPerturbation, FuncType
+from utils.utils import save_dict_to_pickle, load_model_and_weights
 
 
 class SimulatedAnnealingSearch(AdvPerturbation):
 
     def __init__(self,
                  input_matrix: torch.Tensor,
-                 func,
-                 c,
-                 q,
-                 func_gpu=None,
-                 max_calls = 32):
+                 func: FuncType,
+                 q:float,
+                 func_gpu: Optional[FuncType]=None,
+                 max_calls:int = 32,
+                 budget_calls:int=1_000):
 
-        super().__init__(input_matrix, func, c, func_gpu, max_calls)
+        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls)
 
-        self.q  = q
-        self._q = int(q*input_matrix.numel())
         self.T0 = None
 
 
     def random_geneset(self):
         """Random genome via rejection sampling — better when total >> k."""
         chosen = set()
-        while len(chosen) < self._q:
+        while len(chosen) < self.n_perturbed:
             chosen.add(random.randrange(self.total))
         return np.array(sorted(chosen), dtype=np.int64)
 
@@ -55,7 +55,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         """
 
         obj_delta = np.zeros(n_samples)
-        idx       = self._sample_entries(self._q)
+        idx       = self._sample_entries(self.n_perturbed)
         n_calls, err    = self.compute_max_err(idx)
 
         if verbose:
@@ -103,7 +103,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         counter = 0
         L       = L0
 
-        iter_idx             = self._sample_entries(self._q)
+        iter_idx             = self._sample_entries(self.n_perturbed)
         iter_calls, iter_err = self.compute_max_err(iter_idx)
 
         # chains       = [L]
@@ -121,14 +121,14 @@ class SimulatedAnnealingSearch(AdvPerturbation):
             print(f"Starting search w/ T0 = {T:.3e}")
 
         while (T > tol and counter < 25
-               and self.compute_max_err.call_count < self.c
+               and self.compute_max_err.call_count < self.budget_calls
                ):
 
             accept_prob = None
 
             for _ in range(L):
 
-                if self.compute_max_err.call_count >= self.c:
+                if self.compute_max_err.call_count >= self.budget_calls:
                     budget_exhausted = True
                     break
                 
@@ -210,17 +210,16 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # EXPERIMENT INPUTS
     # ------------------------------------------------------------------
-    if model_name.upper().startswith("EFF"):
-        model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
-    else:
-        model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
-                    
+    # if model_name.upper().startswith("EFF"):
+    #     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
+    #     W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
+    # else:
+    #     model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
+    #     W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
+
+    model, W = load_model_and_weights(model_name, dtype)                
     n_latent = W.shape[0]
 
-    W0    = torch.randn(n_latent, n_latent,
-                            dtype=dtype)  
     X     = torch.randn(n_test, n_latent, n_latent,
                             dtype=dtype)
     X_img = torch.randn(n_test, 1, 3, 224, 224,
@@ -249,9 +248,9 @@ if __name__ == "__main__":
             targ_aux = SimulatedAnnealingSearch(
                                             input_matrix=_x, 
                                             func=W,
-                                            c=c,
                                             q=q,
-                                            max_calls=MAX_CALLS)
+                                            max_calls=MAX_CALLS,
+                                            budget_calls=c)
             targ_aux.init_temp(verbose=False)
             sa_instances.update({(j, q) : targ_aux})
         err = targ_aux.full_perturbation_err

@@ -8,57 +8,43 @@ import numpy as np
 import threading
 import torchvision.models as models
 
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 
-from adv_matrix import AdvPerturbation
-from utils.utils import save_dict_to_pickle
+from adv_matrix import AdvPerturbation, FuncType
+from utils.utils import save_dict_to_pickle, load_model_and_weights
 from utils.plotting_utils import generation_plot
 
-
-_call_lock = threading.Lock()
 
 class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def __init__(self,
-                input_matrix,
-                func,
-                c, 
-                q,
-                func_gpu=None,
-                max_calls = 32,
-                n_generations = 10, 
-                pop_size=50, 
-                mating_pct=0.4,
-                keep_full_history=False):
+                input_matrix: torch.Tensor,
+                func: FuncType,
+                q:float,
+                func_gpu: Optional[FuncType]=None,
+                max_calls:int = 32,
+                budget_calls:int = 1_000,
+                pop_size:int = 50, 
+                mating_pct:float = 0.4,
+                keep_full_history:bool = False):
 
-        super().__init__(input_matrix, func, c, func_gpu, max_calls)
+        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls)
 
-        assert n_generations*pop_size <= c, "Invalid combination of parameters"
-
-        self.q  = q
-        self._p = int(q*input_matrix.numel())
-                
-        self.n_generations = n_generations
-        self.stop_counter  = max(1+n_generations//2, 10)
-        # self.stop_counter  = 20
+        self.n_generations = n_generations = max(1, budget_calls// pop_size)
+        self.stop_counter  = max(10, 1+n_generations//2)
         self.pop_size      = pop_size
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct*pop_size)
 
-        # evolve_generation()/mating_probabilities() only ever read the last
-        # entry of population/fitness. By default (keep_full_history=False)
-        # we drop older generations' full genesets/index arrays as soon as
-        # a new generation replaces them, keeping only a lightweight
-        # (ulp_calls, best_err) summary in self.history for track_max()/plots.
-        # Set keep_full_history=True if you need every generation's full
-        # population retained (uses much more memory, scales with
-        # n_generations * pop_size).
         self.keep_full_history = keep_full_history
 
         self.population = []
         self.fitness    = []
         self.history    = []   # [(ulp_calls, best_err), ...] one per generation
         self.ulp_calls  = [0]
+
+        self._call_lock = threading.Lock()
          
         # if self.population is None:
         #     self.population = []
@@ -67,7 +53,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def init_population(self):
 
-        first_gen = [self._sample_entries(self._p) for _ in range(self.pop_size)]
+        first_gen = [self._sample_entries(self.n_perturbed) for _ in range(self.pop_size)]
         # gen_error = [self.compute_max_err(idx) for idx in first_gen]
         with ThreadPoolExecutor(max_workers=8) as ex:
             gen_error = list(ex.map(self._compute_max_err_threadsafe, first_gen))
@@ -94,7 +80,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def _compute_max_err_threadsafe(self, idx):
         result = self.compute_max_err.func(idx)   # bypass CallTracker's own increment (not thread-safe as-is)
-        with _call_lock:
+        with self._call_lock:
             self.compute_max_err.call_count += 1
         return result   
 
@@ -276,17 +262,16 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # EXPERIMENT INPUTS
     # ------------------------------------------------------------------
-    if model_name.upper().startswith("EFF"):
-        model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
-    else:
-        model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
-                
+    # if model_name.upper().startswith("EFF"):
+    #     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
+    #     W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
+    # else:
+    #     model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
+    #     W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
+
+    model, W = load_model_and_weights(model_name, dtype)
     n_latent = W.shape[0]
 
-    W0    = torch.randn(n_latent, n_latent,
-                        dtype=dtype)  
     X     = torch.randn(n_test, n_latent, n_latent,
                         dtype=dtype)
     X_img = torch.randn(n_test, 1, 3, 224, 224,
@@ -333,11 +318,10 @@ if __name__ == "__main__":
             ga = AdversarialGeneticAlgorithm(
                 input_matrix=X_test,
                 func=W,
-                c=c,
                 q=q,
-                max_calls=MAX_CALLS, 
-                n_generations=n_generations,
-                pop_size=pop_size,
+                max_calls=MAX_CALLS,
+                budget_calls=c,
+                pop_size=pop_size
             )
 
             start_t = time.time()
