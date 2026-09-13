@@ -8,7 +8,7 @@ import pandas as pd
 import torch.nn.functional as F
 
 from torch.linalg import vector_norm, multi_dot
-
+import torchvision.models as models
 
 
 def print_sys_specs():
@@ -26,7 +26,19 @@ def print_sys_specs():
         print("Memory reserved:", torch.cuda.memory_reserved(0))
     else:
         print("GPU not available: Connect to a GPU environment")
-        
+
+
+def load_model_and_weights(model_name:str, dtype:torch.dtype = torch.float32):
+
+    if model_name.upper().startswith("EFF"):
+        model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
+        W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
+    else:
+        model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
+        W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
+
+    return model, W
+
 
 def hash_tensor(*tensors: torch.Tensor):
     h = hashlib.sha256()

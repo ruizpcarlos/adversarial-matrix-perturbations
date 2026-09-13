@@ -1,15 +1,19 @@
 import torch
 import random
 import copy
+# import threading
 import numpy as np
 import torch.nn as nn
 
+from typing import Union, Optional, Tuple
 from tqdm import tqdm
 from torch.linalg import vector_norm
 from functools import cached_property, update_wrapper
 
 from utils.utils import product_err
 from utils.plotting_utils import plot_max
+
+FuncType = Union[torch.Tensor, nn.Module]
 
 class CallTracker:
     def __init__(self, func):
@@ -104,8 +108,13 @@ def nextafter(x: torch.Tensor, offset: torch.Tensor):
 
 class AdvPerturbation:
 
-    def __init__(self, input_matrix: torch.Tensor, func, c,
-                 max_calls = 256):
+    def __init__(self, 
+                 input_matrix: torch.Tensor, 
+                 func: FuncType, 
+                 q:float,
+                 func_gpu: Optional[FuncType] = None,
+                 max_calls:int = 32,
+                 budget_calls: int = 1_000):
 
         self.input_matrix = input_matrix
 
@@ -120,8 +129,9 @@ class AdvPerturbation:
                     f"dim {input_matrix.shape[-1]} != {func.shape[-2]}"
                     )
             self.weights     = [func]
+            self.weights_gpu = [func_gpu] if func_gpu is not None else [m.to("cuda") for m in self.weights]      
             self.nn          = None
-            # print("RUNNING W TENSOR MULTIPLICATION")
+            self.nn_gpu      = None
         elif isinstance(func, nn.Module):
             self.tensor_prod = False
             try:
@@ -131,27 +141,24 @@ class AdvPerturbation:
             except Exception as e:
                 raise ValueError(f"Input tensor is not a valid input for func: {e}")
             self.weights     = None
-            self.nn          = func#.eval()
-            self.tensor_prod = False
-            # print("RUNNING W CALLABLE TORCH MODULE")
-            
+            self.weights_gpu = None
+            self.nn          = func
+            self.nn_gpu      = copy.deepcopy(self.nn).eval().to("cuda")             
         else:
             raise TypeError(f"Received a {type(func)} as func: must be either torch.Tensor or nn.Module.")
+
+        if not 0 < q < 1:
+            raise ValueError(f"q must be in [0, 1], got {q}")
+        self.q  = q
+        self.n_perturbed = int(q*input_matrix.numel())
+                
                         
-        # # Dimension check using consecutive pairs
-        # _matrices = [input_matrix] + weights
-        # for a, b in zip(_matrices, _matrices[1:]):
-        #     if a.shape[-1] != b.shape[-2]:
-        #         raise ValueError(
-        #             f"Shape mismatch: {tuple(a.shape)} vs {tuple(b.shape)} — "
-        #             f"dim {a.shape[-1]} != {b.shape[-2]}"
-        #         )
         self.INFTY = torch.tensor(torch.inf)
         
-        self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
-        self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
+        # self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
+        # self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
 
-        self.c = c # Controls the number of calls to compute_max_err
+        self.budget_calls = budget_calls # Controls the number of calls to compute_max_err
 
         self.input_shape = input_matrix.shape
         self.strides = self._strides(self.input_shape)
@@ -165,7 +172,7 @@ class AdvPerturbation:
             self.n_latent = input_matrix.shape[3] # Width
         
         self.max_calls   = max_calls
-        self.total_calls = self.c*max_calls
+        self.total_calls = self.budget_calls*max_calls
 
         # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
@@ -303,7 +310,7 @@ class AdvPerturbation:
         return torch.Tensor(y).unsqueeze(0), max_pert
     
     
-    def compute_max_err(self, indices=None):
+    def compute_max_err(self, indices: Optional[Tuple[torch.Tensor, ...]] = None) -> Tuple[int, float]:
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
@@ -427,41 +434,3 @@ class AdvPerturbation:
         o1 = self.mutate_geneset(o1)
         o2 = self.mutate_geneset(o2)
         return o1, o2
-        
-
-    # def index_to_binary_string(self, *indices):
-    #     strides = self._strides(self.input_shape)
-    #     flat = torch.zeros_like(indices[0])
-    #     for idx, stride in zip(indices, strides):
-    #         flat = flat + idx * stride
-
-    #     total = 1
-    #     for d in self.input_shape:
-    #         total *= d
-
-    #     bits = torch.zeros(total, dtype=torch.int)
-    #     bits[flat] = 1
-    #     return ''.join(bits.numpy().astype(str))
-    
-    # def binary_string_to_index(self, s):
-    #     strides = self._strides(self.input_shape)
-    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
-
-    #     indices = []
-    #     remainder = flat.clone()
-    #     for stride in strides:
-    #         indices.append(remainder // stride)
-    #         remainder = remainder % stride
-    #     return tuple(indices)
-    
-    # def mutate_binary_string(self, s, n_mutations=1):
-    #     s = list(s)
-    #     ones  = [i for i, b in enumerate(s) if b == '1']
-    #     zeros = [i for i, b in enumerate(s) if b == '0']
-
-    #     to_clear = random.sample(ones,  n_mutations)
-    #     to_set   = random.sample(zeros, n_mutations)
-
-    #     for i in to_clear: s[i] = '0'
-    #     for i in to_set:   s[i] = '1'
-    #     return ''.join(s)

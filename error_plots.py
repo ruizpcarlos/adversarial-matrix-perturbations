@@ -8,11 +8,10 @@ import torch.nn as nn
 
 import torchvision.models as models
 
-from psutil import *
 from tqdm import tqdm
 from torch.linalg import vector_norm
 
-from utils.utils import product_err, cum_stats, tensor_to_plotting_inputs, dict_to_plotting_data, print_sys_specs
+from utils.utils import product_err, cum_stats, tensor_to_plotting_inputs, dict_to_plotting_data, print_sys_specs, load_model_and_weights
 from utils.plotting_utils import *
 
 
@@ -103,7 +102,7 @@ class deltaNormPlots:
 
 
 
-class errorPlots:
+class ErrorPlots:
 
     def __init__(self, model_name: str, seed:int, n_samples:int=1):
     
@@ -118,13 +117,17 @@ class errorPlots:
                            f"{model_name}_clf",
                            model_name
                            ]
+
+        model, W   = load_model_and_weights(model_name)
+        self.model = model
+        self.W     = W
                 
-        if model_name.upper().startswith("EFF"):
-            self.model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-            self.W     = torch.transpose(self.model.classifier[1].weight.data, 0, 1)
-        else:
-            self.model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-            self.W     = torch.transpose(self.model.fc.weight.data, 0, 1)
+        # if model_name.upper().startswith("EFF"):
+        #     self.model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
+        #     self.W     = torch.transpose(self.model.classifier[1].weight.data, 0, 1)
+        # else:
+        #     self.model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
+        #     self.W     = torch.transpose(self.model.fc.weight.data, 0, 1)
             
         self.n_latent = self.W.shape[0]
         self.W0 = torch.randn(self.n_latent, self.n_latent)
@@ -457,7 +460,7 @@ if __name__=="__main__":
     # DTYPE - MODEL HISTOGRAMS
     funcname = f'{model_name}_clf'
     
-    err_plots = errorPlots(model_name=model_name, seed=seed)
+    err_plots = ErrorPlots(model_name=model_name, seed=seed)
     y_hist    = err_plots.error_distribution(N_CALLS)
 
     err_plots.plot_distributions(y_hist)
@@ -470,7 +473,7 @@ if __name__=="__main__":
         
     N_SAMPLES  = 30
 
-    acc_err_plots = errorPlots(model_name=model_name, 
+    acc_err_plots = ErrorPlots(model_name=model_name, 
                                seed=seed, 
                                n_samples=N_SAMPLES)
                       

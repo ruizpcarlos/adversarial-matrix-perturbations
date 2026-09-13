@@ -1,53 +1,50 @@
 import time
 import sys
+import gc
 import torch
 import random
 import itertools
-import matplotlib.pyplot as plt
 import numpy as np
 import threading
 import torchvision.models as models
 
-# from torch.linalg import vector_norm, multi_dot
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
 
-from adv_matrix import AdvPerturbation
-from utils.utils import save_dict_to_pickle
+from adv_matrix import AdvPerturbation, FuncType
+from utils.utils import save_dict_to_pickle, load_model_and_weights
 from utils.plotting_utils import generation_plot
 
-
-_call_lock = threading.Lock()
 
 class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def __init__(self,
-                input_matrix,
-                func,
-                c, 
-                q,
-                max_calls = 256,
-                n_generations = 10, 
-                pop_size=50, 
-                mating_pct=0.4):
+                input_matrix: torch.Tensor,
+                func: FuncType,
+                q:float,
+                func_gpu: Optional[FuncType]=None,
+                max_calls:int = 32,
+                budget_calls:int = 1_000,
+                pop_size:int = 50, 
+                mating_pct:float = 0.4,
+                keep_full_history:bool = False):
 
-        super().__init__(input_matrix, func, c, max_calls)
+        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls)
 
-        assert n_generations*pop_size <= c, "Invalid combination of parameters"
-
-        self.q  = q
-        self._p = int(q*input_matrix.numel())
-                
-        self.n_generations = n_generations
-        # self.stop_counter  = n_generations//2
-        self.stop_counter  = 20
+        self.n_generations = n_generations = max(1, budget_calls// pop_size)
+        self.stop_counter  = max(10, 1+n_generations//2)
         self.pop_size      = pop_size
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct*pop_size)
 
+        self.keep_full_history = keep_full_history
+
         self.population = []
         self.fitness    = []
+        self.history    = []   # [(ulp_calls, best_err), ...] one per generation
         self.ulp_calls  = [0]
+
+        self._call_lock = threading.Lock()
          
         # if self.population is None:
         #     self.population = []
@@ -56,7 +53,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def init_population(self):
 
-        first_gen = [self._sample_entries(self._p) for _ in range(self.pop_size)]
+        first_gen = [self._sample_entries(self.n_perturbed) for _ in range(self.pop_size)]
         # gen_error = [self.compute_max_err(idx) for idx in first_gen]
         with ThreadPoolExecutor(max_workers=8) as ex:
             gen_error = list(ex.map(self._compute_max_err_threadsafe, first_gen))
@@ -66,11 +63,24 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.fitness.append(gen_error)
         self.sort_generation()
         self.ulp_calls.append(self.compute_max_err.call_count)
+        self._record_generation()
 
+
+    def _record_generation(self):
+        """Save this generation's (ulp_calls, best_err) summary, and — unless
+        keep_full_history is set — free the *previous* generation's full
+        population/fitness arrays, since nothing reads them again once the
+        next generation exists."""
+        best_calls, best_err = self.fitness[-1][0]
+        self.history.append((best_calls, best_err))
+
+        if not self.keep_full_history and len(self.population) > 1:
+            self.population[-2] = None
+            self.fitness[-2]    = None
 
     def _compute_max_err_threadsafe(self, idx):
         result = self.compute_max_err.func(idx)   # bypass CallTracker's own increment (not thread-safe as-is)
-        with _call_lock:
+        with self._call_lock:
             self.compute_max_err.call_count += 1
         return result   
 
@@ -91,116 +101,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.population[gen] = list(current_gen)
         self.fitness[gen]    = list(gen_fitness)
 
-
-    ################################
-    ###    MUTATION FUNCTIONS    ###
-    ################################
-    # @staticmethod
-    # def _strides(shape):
-    #     strides = [1] * len(shape)
-    #     for i in range(len(shape) - 2, -1, -1):
-    #         strides[i] = strides[i + 1] * shape[i + 1]
-    #     return strides
-
-    # def index_to_binary_string(self, *indices):
-    #     strides = self._strides(self.input_shape)
-    #     flat = torch.zeros_like(indices[0])
-    #     for idx, stride in zip(indices, strides):
-    #         flat = flat + idx * stride
-
-    #     total = 1
-    #     for d in self.input_shape:
-    #         total *= d
-
-    #     bits = torch.zeros(total, dtype=torch.int)
-    #     bits[flat] = 1
-    #     return ''.join(bits.numpy().astype(str))
-    
-    # def binary_string_to_index(self, s):
-    #     strides = self._strides(self.input_shape)
-    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
-
-    #     indices = []
-    #     remainder = flat.clone()
-    #     for stride in strides:
-    #         indices.append(remainder // stride)
-    #         remainder = remainder % stride
-    #     return tuple(indices)
-    
-    # def index_to_binary_string(self, rows, cols):
-    #     m = self.n_input
-    #     n = self.n_latent
-
-    #     flat = rows * n + cols          # row-major flat indices
-    #     bits = torch.zeros(m * n, dtype=torch.int)
-    #     bits[flat] = 1
-
-    #     return ''.join(bits.numpy().astype(str))
-
-    # def binary_string_to_index(self, s):
-    #     n = self.n_input
-    #     flat = torch.tensor([i for i, b in enumerate(s) if b == '1'])
-    #     return flat % n, flat // n
-
-    # def crossover_uniform(self, s1, s2):
-
-    #     s1, s2 = list(s1), list(s2)
-
-    #     # Separate differing positions by type
-    #     zero_one = [i for i in range(len(s1)) if s1[i] == '0' and s2[i] == '1']
-    #     one_zero = [i for i in range(len(s1)) if s1[i] == '1' and s2[i] == '0']
-
-    #     # Swap the same number from each group
-    #     n_swap = min(len(zero_one), len(one_zero)) // 2
-    #     swap   = random.sample(zero_one, n_swap) + random.sample(one_zero, n_swap)
-
-    #     for i in swap:
-    #         s1[i], s2[i] = s2[i], s1[i]
-
-    #     return ''.join(s1), ''.join(s2)
-
-    # def mutate_binary_string(self, s, n_mutations=1):
-    #     s = list(s)
-    #     ones  = [i for i, b in enumerate(s) if b == '1']
-    #     zeros = [i for i, b in enumerate(s) if b == '0']
-
-    #     to_clear = random.sample(ones,  n_mutations)
-    #     to_set   = random.sample(zeros, n_mutations)
-
-    #     for i in to_clear: s[i] = '0'
-    #     for i in to_set:   s[i] = '1'
-    #     return ''.join(s)
-
-    # -------- replaces crossover_uniform --------
-    # def crossover_uniform(self, g1, g2):
-    #     s1, s2 = set(np.asarray(g1).tolist()), set(np.asarray(g2).tolist())
-
-    #     one_zero = list(s1 - s2)   # on in g1, off in g2
-    #     zero_one = list(s2 - s1)   # on in g2, off in g1
-
-    #     n_swap = min(len(zero_one), len(one_zero)) // 2
-    #     to_s1 = set(random.sample(zero_one, n_swap))  # move into s1
-    #     to_s2 = set(random.sample(one_zero, n_swap))  # move into s2
-
-    #     new_s1 = (s1 - to_s2) | to_s1
-    #     new_s2 = (s2 - to_s1) | to_s2
-
-    #     return (np.array(sorted(new_s1), dtype=np.int64),
-    #             np.array(sorted(new_s2), dtype=np.int64))
-
-    # def recombine(self, g1, g2):
-    #     o1, o2 = self.crossover_uniform(g1, g2)
-    #     o1 = self.mutate_geneset(o1)
-    #     o2 = self.mutate_geneset(o2)
-    #     return o1, o2
-    
-    # def recombine(self, s1, s2):
-
-    #     o1, o2 = self.crossover_uniform(s1, s2)
-    #     o1 = self.mutate_binary_string(o1)
-    #     o2 = self.mutate_binary_string(o2)
-
-    #     return o1, o2
 
     def create_offspring(self, parent1, parent2):
 
@@ -254,6 +154,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         # Sort and trim to keep pop_size individuals
         self.sort_generation()
+        self._record_generation()
 
 
     def generation_plot(self, gen=-1):
@@ -286,7 +187,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         j       = 1
         # pop_set = len(set(self.fitness[-1]))
 
-        while (self.compute_max_err.call_count <= self.c 
+        while (self.compute_max_err.call_count <= self.budget_calls
                and j<self.n_generations
                and counter<self.stop_counter):
 
@@ -295,7 +196,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             total_t = time.time()-start_t
 
             n_calls, err         = self.fitness[-1][0]
-            prev_calls, prev_err = self.fitness[-2][0]
+            prev_calls, prev_err = self.history[-2]
             # pop_set              = len(set(self.fitness[-1]))
 
             j+=1
@@ -306,7 +207,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             if verbose:
                 print(f"Evolved {j} generations ({counter}) in {total_t:.3f}s -- ",
                       f"max error = {err:.4e}, ulp calls = {n_calls}")
-                # print(self.compute_max_err.call_count)
             if print_plots:
                 self.generation_plot()
 
@@ -315,7 +215,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def track_max(self):
 
-        max_err = [0] + [abs(x[0][1]) for x in self.fitness]
+        max_err = [0] + [abs(err) for _, err in self.history]
         idx_aux = self.ulp_calls
         y_max   = torch.zeros(self.ulp_calls[-1])
 
@@ -323,6 +223,27 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             y_max[idx_aux[k]: idx_aux[k+1]] = max_err[k]
 
         return y_max.unsqueeze(0)
+
+    def release(self):
+        """Explicitly drop this instance's large in-memory state instead of
+        waiting on refcounting / the cyclic GC to reclaim it. Call this
+        (and then `del` the instance) once you're done with a search() run,
+        especially if you're creating many instances in a loop (e.g. one
+        per sample in a benchmarking script)."""
+        self.population.clear()
+        self.fitness.clear()
+        self.history.clear()
+
+        # Drop the GPU copy of the weights uploaded in AdvPerturbation's
+        # __init__, if present, and let PyTorch's caching allocator reclaim
+        # the underlying CUDA blocks.
+        if getattr(self, "weights_gpu", None) is not None:
+            del self.weights_gpu
+            self.weights_gpu = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        gc.collect()
 
 
 
@@ -340,17 +261,16 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # EXPERIMENT INPUTS
     # ------------------------------------------------------------------
-    if model_name.upper().startswith("EFF"):
-        model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
-    else:
-        model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-        W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
-                
+    # if model_name.upper().startswith("EFF"):
+    #     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
+    #     W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
+    # else:
+    #     model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
+    #     W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
+
+    model, W = load_model_and_weights(model_name, dtype)
     n_latent = W.shape[0]
 
-    W0    = torch.randn(n_latent, n_latent,
-                        dtype=dtype)  
     X     = torch.randn(n_test, n_latent, n_latent,
                         dtype=dtype)
     X_img = torch.randn(n_test, 1, 3, 224, 224,
@@ -397,11 +317,10 @@ if __name__ == "__main__":
             ga = AdversarialGeneticAlgorithm(
                 input_matrix=X_test,
                 func=W,
-                c=c,
                 q=q,
-                max_calls=MAX_CALLS, 
-                n_generations=n_generations,
-                pop_size=pop_size,
+                max_calls=MAX_CALLS,
+                budget_calls=c,
+                pop_size=pop_size
             )
 
             start_t = time.time()
