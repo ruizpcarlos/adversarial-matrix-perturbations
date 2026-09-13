@@ -187,7 +187,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         j       = 1
         # pop_set = len(set(self.fitness[-1]))
 
-        while (self.compute_max_err.call_count <= self.c 
+        while (self.compute_max_err.call_count <= self.budget_calls
                and j<self.n_generations
                and counter<self.stop_counter):
 
@@ -207,7 +207,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             if verbose:
                 print(f"Evolved {j} generations ({counter}) in {total_t:.3f}s -- ",
                       f"max error = {err:.4e}, ulp calls = {n_calls}")
-                # print(self.compute_max_err.call_count)
             if print_plots:
                 self.generation_plot()
 
