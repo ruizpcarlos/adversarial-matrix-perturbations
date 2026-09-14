@@ -350,6 +350,17 @@ class AdvPerturbation:
                 max_error    = _err
 
         return calls_to_max, max_error
+    
+    def compute_adv_input(self)-> torch.Tensor:
+
+        X_adv        = self.input_matrix.clone()
+        idx, n_calls = self.solution
+
+        for _ in range(n_calls):
+            X_adv[idx] = torch.nextafter(X_adv[idx], self.INFTY)
+
+        self.X_adv = X_adv
+        return X_adv
 
     #####################################
     #                 PLOTTING

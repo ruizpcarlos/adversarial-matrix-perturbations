@@ -212,6 +212,9 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 self.generation_plot()
 
         self.n_generations = j
+        self.solution = (self.population[-1][0],
+                        self.fitness[-1][0][0]
+                        )
 
 
     def track_max(self):

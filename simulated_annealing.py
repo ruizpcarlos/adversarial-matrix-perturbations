@@ -189,10 +189,10 @@ class SimulatedAnnealingSearch(AdvPerturbation):
             print(f"Terminated in {len(Y)} iterations w/ error = {best_err:.4e}")
 
         Y = torch.Tensor(Y)#.unsqueeze(0)
-        solution = (best_idx, best_calls)
+        self.solution = (best_idx, best_calls)
 
-        return Y, solution, temps, accept_probs 
-    
+        return Y, self.solution, temps, accept_probs
+ 
 
 
 if __name__ == "__main__":
