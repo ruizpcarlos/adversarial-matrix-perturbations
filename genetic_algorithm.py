@@ -195,9 +195,10 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             self.evolve_generation()
             total_t = time.time()-start_t
 
-            n_calls, err         = self.fitness[-1][0]
+            n_calls, err = self.fitness[-1][0]
+            err          = abs(err)
+
             prev_calls, prev_err = self.history[-2]
-            # pop_set              = len(set(self.fitness[-1]))
 
             j+=1
 
@@ -289,7 +290,10 @@ if __name__ == "__main__":
     targets = []
     print(f"Computing target errors of the sample ({dtype})")
     for _x in X:
-        targ_aux = AdvPerturbation(_x, W, c, max_calls=MAX_CALLS)
+        targ_aux = AdvPerturbation(_x, W, 
+                                   q=0.01, # Not used in this instance, but required for init
+                                   max_calls=MAX_CALLS, 
+                                   budget_calls=c)
         err = targ_aux.full_perturbation_err
         targets.append(err)
 

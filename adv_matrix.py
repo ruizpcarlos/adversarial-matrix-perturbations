@@ -358,7 +358,7 @@ class AdvPerturbation:
         plot_max(y, y_hist, 
                  labels=['random'],
                  n_latent=self.n_input*self.n_latent,
-                 p= self.p,
+                 p= self.q,
                  fname=fname,
                  show_zero=show_zero)
         
