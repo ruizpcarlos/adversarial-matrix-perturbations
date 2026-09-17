@@ -208,8 +208,6 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             total_t = time.time()-start_t
 
             n_calls, err = self.fitness[-1][0]
-            err          = abs(err)
-
             prev_calls, prev_err = self.history[-2]
 
             j+=1
