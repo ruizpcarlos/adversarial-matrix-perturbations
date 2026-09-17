@@ -82,7 +82,7 @@ def pad_to_match(tensors):
     return torch.cat(padded_list, dim=0)
 
 
-def vector_distance(x:torch.Tensor, y:torch.Tensor, ord:np.float=np.inf) -> float:
+def vector_distance(x:torch.Tensor, y:torch.Tensor, ord:float=np.inf) -> float:
 
     diff = (x-y).ravel().squeeze()
 

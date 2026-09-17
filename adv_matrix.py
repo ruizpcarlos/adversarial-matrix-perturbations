@@ -233,7 +233,7 @@ class AdvPerturbation:
             y_cpu  = self.nn(x_cpu)
             y_gpu  = self.nn_gpu(x_gpu)
 
-        d = self.objective_fn(y_cpu, y_gpu.cpu()).item()
+        d = self.objective_fn(y_cpu, y_gpu.cpu())
         
         return d
 
