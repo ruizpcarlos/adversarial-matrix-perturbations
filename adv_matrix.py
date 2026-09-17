@@ -5,12 +5,11 @@ import copy
 import numpy as np
 import torch.nn as nn
 
-from typing import Union, Optional, Tuple
+from typing import Union, Optional, Tuple, Callable
 from tqdm import tqdm
 from torch.linalg import vector_norm
 from functools import cached_property, update_wrapper
-
-from utils.utils import product_err
+from utils.utils import product_err, vector_distance
 from utils.plotting_utils import plot_max
 
 FuncType = Union[torch.Tensor, nn.Module]
@@ -114,7 +113,8 @@ class AdvPerturbation:
                  q:float,
                  func_gpu: Optional[FuncType] = None,
                  max_calls:int = 32,
-                 budget_calls: int = 1_000):
+                 budget_calls: int = 1_000,
+                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None):
 
         self.input_matrix = input_matrix
 
@@ -151,15 +151,9 @@ class AdvPerturbation:
             raise ValueError(f"q must be in [0, 1], got {q}")
         self.q  = q
         self.n_perturbed = int(q*input_matrix.numel())
-                
-                        
+                                    
         self.INFTY = torch.tensor(torch.inf)
         
-        # self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
-        # self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
-
-        self.budget_calls = budget_calls # Controls the number of calls to compute_max_err
-
         self.input_shape = input_matrix.shape
         self.strides = self._strides(self.input_shape)
         self.total = int(input_matrix.numel())
@@ -170,7 +164,13 @@ class AdvPerturbation:
         else: # Input is "image-like": (1, C, H, W)
             self.n_input  = input_matrix.shape[2] # Height
             self.n_latent = input_matrix.shape[3] # Width
+
+        self.objective_fn = (
+                        objective_fn if objective_fn is not None
+                        else vector_distance
+                        )
         
+        self.budget_calls = budget_calls # Controls the number of calls to compute_max_err
         self.max_calls   = max_calls
         self.total_calls = self.budget_calls*max_calls
 
@@ -206,15 +206,16 @@ class AdvPerturbation:
         else:
             return (flat_idx // self.n_latent, flat_idx % self.n_latent)
 
-    
-    # def multi_dot_err(self, mat_cpu, mat_gpu):
+    # def model_err(self, x_cpu, x_gpu):
     #     """
-    #     Used to calculate the error for matrix multiplication:
+    #     Used to calculate the error for forward pass multiplication:
     #     mat_cpu: list of matrices in CPU device
     #     mat_gpu: list of matrices hosted in GPU
     #     """
-    #     y_cpu  = multi_dot(mat_cpu)
-    #     y_gpu  = multi_dot(mat_gpu)
+    #     with torch.no_grad():
+    #         y_cpu  = self.nn(x_cpu)
+    #         y_gpu  = self.nn_gpu(x_gpu)
+        
     #     y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
 
     #     if len(y_diff.shape) > 0:
@@ -223,25 +224,18 @@ class AdvPerturbation:
     #         _y = y_diff.item()
 
     #     return _y
-    
+
+    def _product_err(self, mat_cpu, mat_gpu):
+        return product_err(mat_cpu, mat_gpu, self.objective_fn)
+
     def model_err(self, x_cpu, x_gpu):
-        """
-        Used to calculate the error for forward pass multiplication:
-        mat_cpu: list of matrices in CPU device
-        mat_gpu: list of matrices hosted in GPU
-        """
         with torch.no_grad():
             y_cpu  = self.nn(x_cpu)
             y_gpu  = self.nn_gpu(x_gpu)
+
+        d = self.objective_fn(y_cpu, y_gpu.cpu()).item()
         
-        y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
-
-        if len(y_diff.shape) > 0:
-            _y = vector_norm(y_diff, ord=np.inf).item()
-        else:
-            _y = y_diff.item()
-
-        return _y
+        return d
 
 
     def random_perturbation(self, step=1, verbose =False):
@@ -255,7 +249,7 @@ class AdvPerturbation:
             mat_cpu  = [None] + self.weights
             mat_gpu  = [None] + self.weights_gpu
         
-        abs_err = -1
+        max_err = -np.inf
         n_iter  = self.total_calls//step
         # infty   = torch.tensor(torch.inf)
 
@@ -276,14 +270,6 @@ class AdvPerturbation:
             if counts[idx] >= self.max_calls:
                 maxed.add(idx)
 
-            # idx = self._sample_entries()
-            # for i in range(self._p):
-            #     j = (idx[0][i].item(), idx[1][i].item())
-            #     if j in perturbation_dict:
-            #         perturbation_dict[j] += step
-            #     else:
-            #         perturbation_dict.update({j: step})
- 
             if step > 1:
                 for _ in range(step):
                     X_[idx] = _nextafter(X_[idx], self.INFTY)
@@ -299,12 +285,12 @@ class AdvPerturbation:
             if not self.tensor_prod:
                 _y = self.model_err(X_, X_gpu)
             else:
-                _y = product_err(mat_cpu, mat_gpu)
+                _y = self._product_err(mat_cpu, mat_gpu)
 
             y[i] = _y
 
-            if abs(_y) > abs_err:
-                abs_err  = abs(_y)
+            if _y > max_err:
+                max_err  = _y
                 max_pert = {k:v for k, v in counts.items()}
                 
         return torch.Tensor(y).unsqueeze(0), max_pert
@@ -320,8 +306,7 @@ class AdvPerturbation:
             mat_cpu  = [None] + self.weights
             mat_gpu  = [None] + self.weights_gpu
         
-        abs_err      = 0
-        max_error    = 0
+        max_err    = -np.inf
         calls_to_max = 1
 
         for i in range(self.max_calls):
@@ -342,14 +327,13 @@ class AdvPerturbation:
             if not self.tensor_prod:
                 _err = self.model_err(X_, X_gpu)
             else:
-                _err = product_err(mat_cpu, mat_gpu)
+                _err = self._product_err(mat_cpu, mat_gpu)
 
-            if abs(_err) > abs_err:
+            if _err > max_err:
                 calls_to_max = i+1
-                abs_err      = abs(_err)
-                max_error    = _err
+                max_err   = _err
 
-        return calls_to_max, max_error
+        return calls_to_max, max_err
     
     def compute_adv_input(self)-> torch.Tensor:
 
