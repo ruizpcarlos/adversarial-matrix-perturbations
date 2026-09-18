@@ -142,7 +142,7 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
     y, idx  = benchmark.random_perturbation()
     elapsed = time.time() - start_t
 
-    max_err, _ = torch.max(torch.abs(y), dim=1)
+    max_err, _ = torch.max(y, dim=1)
     max_err = max_err.item()
     budget = C
 

@@ -1,12 +1,13 @@
-import torch
 import hashlib
-import pickle  
+import pickle
 import platform
+from functools import partial
+
+import torch
 import psutil  # pip install psutil
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
-
 from torch.linalg import vector_norm, multi_dot
 import torchvision.models as models
 
@@ -81,22 +82,46 @@ def pad_to_match(tensors):
     return torch.cat(padded_list, dim=0)
 
 
-def product_err(mat_cpu, mat_gpu):
+def vector_distance(x:torch.Tensor, y:torch.Tensor, ord:float=np.inf) -> float:
+
+    diff = (x-y).ravel().squeeze()
+
+    return torch.linalg.vector_norm(diff, ord=ord).item()
+
+def product_err(mat_cpu, mat_gpu, objective_fn=None):
     """
     Used to calculate the error for matrix multiplication:
     mat_cpu: list of matrices in CPU device
     mat_gpu: list of matrices hosted in GPU
+    objective_fn: callable(y_diff: Tensor) -> Tensor (scalar-valued).
+                  Defaults to inf-norm (max abs difference), matching the
+                  previous hardcoded behavior.
     """
+    if objective_fn is None:
+        objective_fn = vector_distance
+
     y_cpu  = multi_dot(mat_cpu)
     y_gpu  = multi_dot(mat_gpu)
-    y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
 
-    if len(y_diff.shape) > 0:
-        _y = vector_norm(y_diff, ord=np.inf).item()
-    else:
-        _y = y_diff.item()
+    return objective_fn(y_cpu, y_gpu.cpu())
 
-    return _y
+ 
+# def product_err(mat_cpu, mat_gpu):
+#     """
+#     Used to calculate the error for matrix multiplication:
+#     mat_cpu: list of matrices in CPU device
+#     mat_gpu: list of matrices hosted in GPU
+#     """
+#     y_cpu  = multi_dot(mat_cpu)
+#     y_gpu  = multi_dot(mat_gpu)
+#     y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
+
+#     if len(y_diff.shape) > 0:
+#         _y = vector_norm(y_diff, ord=np.inf).item()
+#     else:
+#         _y = y_diff.item()
+
+#     return _y
 
 
 def cum_stats(y:torch.Tensor):

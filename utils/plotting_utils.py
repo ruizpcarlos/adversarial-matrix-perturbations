@@ -215,7 +215,7 @@ def iter_error_distributions(Ys, fname=None):
 
     for Y in Ys:
         if len(Y) > 2:
-            raise ValueError(f"What is this bullshit")
+            raise ValueError(f"Number of elements mismatch")
 
     fig, axes = plt.subplots(nrows=2, ncols=2,
                               figsize=[18, 10],
