@@ -12,6 +12,13 @@ from torch.linalg import vector_norm, multi_dot
 import torchvision.models as models
 
 
+
+_FORMATS = {
+    torch.float32:  (torch.int32, 23, 8),
+    torch.bfloat16: (torch.int16,  7, 8),
+}
+
+
 def print_sys_specs():
   
     print("Processor:", platform.processor())
@@ -80,6 +87,44 @@ def pad_to_match(tensors):
     max_len = max(t.size(1) for t in tensors)
     padded_list = [F.pad(t, (0, max_len - t.size(1)), mode='replicate') for t in tensors]
     return torch.cat(padded_list, dim=0)
+
+
+def wrap_score(x: torch.Tensor, alpha: float = 0.5, max_calls: int = 32) -> torch.Tensor:
+    """
+    Per-entry score in [0, 1]. High = easy to wrap AND large magnitude.
+
+    closeness : 1 when a single nextafter wraps, decreasing linearly to 0 once
+                steps > window.
+    bonus     : normalised exponent (larger |x| -> larger bonus).
+    score     : closeness * ((1 - alpha) + alpha * bonus)
+                alpha=0 -> pure closeness; alpha=1 -> closeness * bonus.
+    """
+    int_dtype, m_bits, e_bits = _FORMATS[x.dtype]
+    max_mant = (1 << m_bits) - 1
+    max_exp  = (1 << e_bits) - 1
+
+    # fp32: only entries that can wrap within the budget score > 0
+    # bf16: full mantissa range (2^7) -> score grows linearly over the binade
+    window = max_calls if x.dtype == torch.float32 else (1 << m_bits)
+
+    x_int    = x.view(int_dtype)
+    sign     = (x_int >> (m_bits + e_bits)) & 1
+    exponent = (x_int >> m_bits) & max_exp
+    mantissa = x_int & max_mant
+
+    steps = torch.where(sign == 0, max_mant - mantissa + 1, mantissa + 1)
+
+    # a) closeness: steps=1 -> 1.0, steps=window -> 1/window, steps>window -> 0
+    closeness = (window - steps + 1).clamp(min=0).float() / window
+
+    # b) magnitude bonus: min-max normalised exponent over finite entries
+    finite = exponent < max_exp
+    e = exponent.float()
+    lo, hi = e[finite].min(), e[finite].max()
+    bonus = (e - lo) / (hi - lo).clamp(min=1.0)
+
+    score = closeness * ((1 - alpha) + alpha * bonus)
+    return torch.where(finite, score, torch.zeros_like(score))
 
 
 def vector_distance(x:torch.Tensor, y:torch.Tensor, ord:float=np.inf) -> float:

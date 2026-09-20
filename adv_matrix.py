@@ -9,7 +9,7 @@ from typing import Union, Optional, Tuple, Callable
 from tqdm import tqdm
 from torch.linalg import vector_norm
 from functools import cached_property, update_wrapper
-from utils.utils import product_err, vector_distance
+from utils.utils import product_err, vector_distance, wrap_score
 from utils.plotting_utils import plot_max
 
 FuncType = Union[torch.Tensor, nn.Module]
@@ -114,7 +114,8 @@ class AdvPerturbation:
                  func_gpu: Optional[FuncType] = None,
                  max_calls:int = 32,
                  budget_calls: int = 1_000,
-                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None):
+                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
+                 weighted_sampling: bool = False):
 
         self.input_matrix = input_matrix
 
@@ -174,6 +175,12 @@ class AdvPerturbation:
         self.max_calls   = max_calls
         self.total_calls = self.budget_calls*max_calls
 
+        self.weighted_sampling = weighted_sampling
+        self.sample_weights = (
+            self._build_sample_weights()
+            if weighted_sampling else None
+        )
+
         # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
 
@@ -192,19 +199,45 @@ class AdvPerturbation:
         w = aux_idx % self.n_latent
         return c, h, w
 
+    def _build_sample_weights(self, alpha: float=0.1, eps:float= 0.1) -> torch.Tensor:
+        score = wrap_score(self.input_matrix.reshape(-1),
+                        alpha=alpha, max_calls=self.max_calls).double()
+        n, total = score.numel(), score.sum()
+        uniform = torch.full_like(score, 1.0 / n)
+        if total <= 0:                       # nothing can wrap: fall back to uniform
+            return uniform
+        # Mixture: with prob (1-eps) follow the score, with prob eps sample uniformly
+        return (1 - eps) * score / total + eps * uniform
 
-    def _sample_entries(self, num_samples=1):
 
-        flat_idx = torch.randint(self.input_matrix.numel(), 
-                                (num_samples,)
-                                )
+    def _draw_flat(self, num_samples: int, weighted=None):
+        weighted = self.weighted_sampling if weighted is None else weighted
+        if not weighted or self.sample_weights is None:
+            return torch.randint(self.total, (num_samples,))
+        return torch.multinomial(self.sample_weights, num_samples, replacement=False)
+    
+
+    def _sample_entries(self, num_samples=1, weighted=None):
+        flat_idx = self._draw_flat(num_samples, weighted)
 
         if not self.tensor_prod:
             indices = self.flat_to_3d(flat_idx)
-            return (torch.zeros(num_samples, dtype=int),
-                        *indices)
+            return (torch.zeros(num_samples, dtype=int), *indices)
         else:
             return (flat_idx // self.n_latent, flat_idx % self.n_latent)
+    
+    # def _sample_entries(self, num_samples=1):
+
+    #     flat_idx = torch.randint(self.input_matrix.numel(), 
+    #                             (num_samples,)
+    #                             )
+
+    #     if not self.tensor_prod:
+    #         indices = self.flat_to_3d(flat_idx)
+    #         return (torch.zeros(num_samples, dtype=int),
+    #                     *indices)
+    #     else:
+    #         return (flat_idx // self.n_latent, flat_idx % self.n_latent)
 
     # def model_err(self, x_cpu, x_gpu):
     #     """
@@ -227,6 +260,7 @@ class AdvPerturbation:
 
     def _product_err(self, mat_cpu, mat_gpu):
         return product_err(mat_cpu, mat_gpu, self.objective_fn)
+    
 
     def model_err(self, x_cpu, x_gpu):
         with torch.no_grad():
@@ -262,13 +296,15 @@ class AdvPerturbation:
 
         for i in iterator:
 
-            idx = self._sample_entries()
-            while idx in maxed:
-                idx = self._sample_entries()
+            idx = self._sample_entries(weighted=False)
+            key = tuple(int(i) for i in idx)
+            while key in maxed:
+                idx = self._sample_entries(weighted=False)
+                key = tuple(int(i) for i in idx)
 
-            counts[idx] = counts.get(idx, 0) + 1
-            if counts[idx] >= self.max_calls:
-                maxed.add(idx)
+            counts[key] = counts.get(key, 0) + 1
+            if counts[key] >= self.max_calls:
+                maxed.add(key)
 
             if step > 1:
                 for _ in range(step):
@@ -399,11 +435,12 @@ class AdvPerturbation:
 
         active = set(genome.tolist())
         new_vals = set()
-        # rejection sampling — fast because k << total
         while len(new_vals) < n_mutations:
-            cand = random.randrange(self.total)
-            if cand not in active and cand not in new_vals:
-                new_vals.add(cand)
+            for cand in self._draw_flat(4 * n_mutations).tolist():
+                if cand not in active and cand not in new_vals:
+                    new_vals.add(cand)
+                    if len(new_vals) == n_mutations:
+                        break
 
         genome[clear_pos] = list(new_vals)
         return np.sort(genome)

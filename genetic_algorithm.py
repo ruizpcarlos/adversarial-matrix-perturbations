@@ -25,11 +25,12 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 max_calls:int = 32,
                 budget_calls:int = 1_000,
                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+                weighted_sampling: bool = False,
                 pop_size:int = 50, 
                 mating_pct:float = 0.4,
                 keep_full_history:bool = False):
 
-        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls, objective_fn)
+        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls, objective_fn, weighted_sampling)
 
         self.n_generations = n_generations = max(1, budget_calls// pop_size)
         self.stop_counter  = max(10, 1+n_generations//2)
