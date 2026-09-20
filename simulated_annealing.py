@@ -6,10 +6,8 @@ import torch
 import random
 import numpy as np
 
-from typing import Optional
+from typing import Optional, Callable
 from tqdm import tqdm
-
-import torchvision.models as models
 
 from adv_matrix import AdvPerturbation, FuncType
 from utils.utils import save_dict_to_pickle, load_model_and_weights
@@ -23,9 +21,11 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                  q:float,
                  func_gpu: Optional[FuncType]=None,
                  max_calls:int = 32,
-                 budget_calls:int=1_000):
+                 budget_calls:int=1_000,
+                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+                 weighted_sampling: bool = False):
 
-        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls)
+        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls, objective_fn, weighted_sampling)
 
         self.T0 = None
 
@@ -134,7 +134,6 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                 
                 idx = self.generate_new_sol(iter_idx)
                 n_calls, _err = self.compute_max_err(idx)
-                _err = abs(_err)
 
                 delta_err   = _err - iter_err
                 delta_calls = n_calls - iter_calls
@@ -189,10 +188,10 @@ class SimulatedAnnealingSearch(AdvPerturbation):
             print(f"Terminated in {len(Y)} iterations w/ error = {best_err:.4e}")
 
         Y = torch.Tensor(Y)#.unsqueeze(0)
-        solution = (best_idx, best_calls)
+        self.solution = (best_idx, best_calls)
 
-        return Y, solution, temps, accept_probs 
-    
+        return Y, self.solution, temps, accept_probs
+ 
 
 
 if __name__ == "__main__":

@@ -6,9 +6,8 @@ import random
 import itertools
 import numpy as np
 import threading
-import torchvision.models as models
 
-from typing import Optional
+from typing import Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from adv_matrix import AdvPerturbation, FuncType
@@ -25,11 +24,13 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 func_gpu: Optional[FuncType]=None,
                 max_calls:int = 32,
                 budget_calls:int = 1_000,
+                objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+                weighted_sampling: bool = False,
                 pop_size:int = 50, 
                 mating_pct:float = 0.4,
                 keep_full_history:bool = False):
 
-        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls)
+        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls, objective_fn, weighted_sampling)
 
         self.n_generations = n_generations = max(1, budget_calls// pop_size)
         self.stop_counter  = max(10, 1+n_generations//2)
@@ -93,7 +94,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         # Sorts by descending error 1st, asc calls to max 2nd
         scored_pop = sorted(
                             zip(current_gen, gen_fitness),
-                            key=lambda x: (-abs(x[1][1]), x[1][0])
+                            key=lambda x: (-x[1][1], x[1][0])
                         )
         # Keeps only pop_size individuals - for new gens
         current_gen, gen_fitness = zip(*scored_pop[:self.pop_size])
@@ -114,13 +115,25 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
         return xy1, xy2
 
-    def mating_probabilities(self):
+    # def mating_probabilities(self):
 
-        # Computes mating probabilities for last generation
-        w_probs = [abs(err[1]) for err in self.fitness[-1]][:self.mating_pop]
-        w_probs = np.array(w_probs)
-        probs   = w_probs/w_probs.sum()
-        return probs
+    #     # Computes mating probabilities for last generation
+    #     w_probs = [abs(err[1]) for err in self.fitness[-1]][:self.mating_pop]
+    #     w_probs = np.array(w_probs)
+    #     probs   = w_probs/w_probs.sum()
+    #     return probs
+    
+    
+    def mating_probabilities(self):
+        # Computes matig probabilites for the last gen using Boltzmann distribution w T=1
+        scores = np.array(
+            [err[1] for err in self.fitness[-1][:self.mating_pop]],
+            dtype=float,
+        )
+        scaled = scores - scores.max()          # stability only — same result either way
+        w_probs = np.exp(scaled)
+        return w_probs / w_probs.sum()
+    
 
     def evolve_generation(self):
 
@@ -195,9 +208,8 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             self.evolve_generation()
             total_t = time.time()-start_t
 
-            n_calls, err         = self.fitness[-1][0]
+            n_calls, err = self.fitness[-1][0]
             prev_calls, prev_err = self.history[-2]
-            # pop_set              = len(set(self.fitness[-1]))
 
             j+=1
 
@@ -211,11 +223,14 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 self.generation_plot()
 
         self.n_generations = j
+        self.solution = (self.population[-1][0],
+                        self.fitness[-1][0][0]
+                        )
 
 
     def track_max(self):
 
-        max_err = [0] + [abs(err) for _, err in self.history]
+        max_err = [0] + [err for _, err in self.history]
         idx_aux = self.ulp_calls
         y_max   = torch.zeros(self.ulp_calls[-1])
 
@@ -223,6 +238,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             y_max[idx_aux[k]: idx_aux[k+1]] = max_err[k]
 
         return y_max.unsqueeze(0)
+
 
     def release(self):
         """Explicitly drop this instance's large in-memory state instead of
@@ -289,7 +305,10 @@ if __name__ == "__main__":
     targets = []
     print(f"Computing target errors of the sample ({dtype})")
     for _x in X:
-        targ_aux = AdvPerturbation(_x, W, c, max_calls=MAX_CALLS)
+        targ_aux = AdvPerturbation(_x, W, 
+                                   q=0.01, # Not used in this instance, but required for init
+                                   max_calls=MAX_CALLS, 
+                                   budget_calls=c)
         err = targ_aux.full_perturbation_err
         targets.append(err)
 

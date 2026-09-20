@@ -5,12 +5,11 @@ import copy
 import numpy as np
 import torch.nn as nn
 
-from typing import Union, Optional, Tuple
+from typing import Union, Optional, Tuple, Callable
 from tqdm import tqdm
 from torch.linalg import vector_norm
 from functools import cached_property, update_wrapper
-
-from utils.utils import product_err
+from utils.utils import product_err, vector_distance, wrap_score
 from utils.plotting_utils import plot_max
 
 FuncType = Union[torch.Tensor, nn.Module]
@@ -114,7 +113,9 @@ class AdvPerturbation:
                  q:float,
                  func_gpu: Optional[FuncType] = None,
                  max_calls:int = 32,
-                 budget_calls: int = 1_000):
+                 budget_calls: int = 1_000,
+                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
+                 weighted_sampling: bool = False):
 
         self.input_matrix = input_matrix
 
@@ -151,15 +152,9 @@ class AdvPerturbation:
             raise ValueError(f"q must be in [0, 1], got {q}")
         self.q  = q
         self.n_perturbed = int(q*input_matrix.numel())
-                
-                        
+                                    
         self.INFTY = torch.tensor(torch.inf)
         
-        # self.weights_gpu = None if self.weights is None else [m.to("cuda") for m in self.weights]
-        # self.nn_gpu      = None if self.nn is None else copy.deepcopy(self.nn).eval().to("cuda") 
-
-        self.budget_calls = budget_calls # Controls the number of calls to compute_max_err
-
         self.input_shape = input_matrix.shape
         self.strides = self._strides(self.input_shape)
         self.total = int(input_matrix.numel())
@@ -170,9 +165,21 @@ class AdvPerturbation:
         else: # Input is "image-like": (1, C, H, W)
             self.n_input  = input_matrix.shape[2] # Height
             self.n_latent = input_matrix.shape[3] # Width
+
+        self.objective_fn = (
+                        objective_fn if objective_fn is not None
+                        else vector_distance
+                        )
         
+        self.budget_calls = budget_calls # Controls the number of calls to compute_max_err
         self.max_calls   = max_calls
         self.total_calls = self.budget_calls*max_calls
+
+        self.weighted_sampling = weighted_sampling
+        self.sample_weights = (
+            self._build_sample_weights()
+            if weighted_sampling else None
+        )
 
         # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
@@ -192,29 +199,56 @@ class AdvPerturbation:
         w = aux_idx % self.n_latent
         return c, h, w
 
+    def _build_sample_weights(self, alpha: float=0.1, eps:float= 0.1) -> torch.Tensor:
+        score = wrap_score(self.input_matrix.reshape(-1),
+                        alpha=alpha, max_calls=self.max_calls).double()
+        n, total = score.numel(), score.sum()
+        uniform = torch.full_like(score, 1.0 / n)
+        if total <= 0:                       # nothing can wrap: fall back to uniform
+            return uniform
+        # Mixture: with prob (1-eps) follow the score, with prob eps sample uniformly
+        return (1 - eps) * score / total + eps * uniform
 
-    def _sample_entries(self, num_samples=1):
 
-        flat_idx = torch.randint(self.input_matrix.numel(), 
-                                (num_samples,)
-                                )
+    def _draw_flat(self, num_samples: int, weighted=None):
+        weighted = self.weighted_sampling if weighted is None else weighted
+        if not weighted or self.sample_weights is None:
+            return torch.randint(self.total, (num_samples,))
+        return torch.multinomial(self.sample_weights, num_samples, replacement=False)
+    
+
+    def _sample_entries(self, num_samples=1, weighted=None):
+        flat_idx = self._draw_flat(num_samples, weighted)
 
         if not self.tensor_prod:
             indices = self.flat_to_3d(flat_idx)
-            return (torch.zeros(num_samples, dtype=int),
-                        *indices)
+            return (torch.zeros(num_samples, dtype=int), *indices)
         else:
             return (flat_idx // self.n_latent, flat_idx % self.n_latent)
-
     
-    # def multi_dot_err(self, mat_cpu, mat_gpu):
+    # def _sample_entries(self, num_samples=1):
+
+    #     flat_idx = torch.randint(self.input_matrix.numel(), 
+    #                             (num_samples,)
+    #                             )
+
+    #     if not self.tensor_prod:
+    #         indices = self.flat_to_3d(flat_idx)
+    #         return (torch.zeros(num_samples, dtype=int),
+    #                     *indices)
+    #     else:
+    #         return (flat_idx // self.n_latent, flat_idx % self.n_latent)
+
+    # def model_err(self, x_cpu, x_gpu):
     #     """
-    #     Used to calculate the error for matrix multiplication:
+    #     Used to calculate the error for forward pass multiplication:
     #     mat_cpu: list of matrices in CPU device
     #     mat_gpu: list of matrices hosted in GPU
     #     """
-    #     y_cpu  = multi_dot(mat_cpu)
-    #     y_gpu  = multi_dot(mat_gpu)
+    #     with torch.no_grad():
+    #         y_cpu  = self.nn(x_cpu)
+    #         y_gpu  = self.nn_gpu(x_gpu)
+        
     #     y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
 
     #     if len(y_diff.shape) > 0:
@@ -223,67 +257,63 @@ class AdvPerturbation:
     #         _y = y_diff.item()
 
     #     return _y
+
+    def _product_err(self, mat_cpu, mat_gpu):
+        return product_err(mat_cpu, mat_gpu, self.objective_fn)
     
+
     def model_err(self, x_cpu, x_gpu):
-        """
-        Used to calculate the error for forward pass multiplication:
-        mat_cpu: list of matrices in CPU device
-        mat_gpu: list of matrices hosted in GPU
-        """
         with torch.no_grad():
             y_cpu  = self.nn(x_cpu)
             y_gpu  = self.nn_gpu(x_gpu)
+
+        d = self.objective_fn(y_cpu, y_gpu.cpu())
         
-        y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
-
-        if len(y_diff.shape) > 0:
-            _y = vector_norm(y_diff, ord=np.inf).item()
-        else:
-            _y = y_diff.item()
-
-        return _y
+        return d
 
 
-    def random_perturbation(self, step=1, verbose =False):
+    def random_perturbation(self, 
+                            step=1, 
+                            weighted=False, 
+                            early_stopping = True, 
+                            verbose=False):
 
+        if weighted and not self.weighted_sampling:
+            raise ValueError(f"Passed weighted={weighted}  but there are no weights available for sampling")
+        
         _nextafter.reset()
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
 
         if self.tensor_prod:
-            mat_cpu  = [None] + self.weights
-            mat_gpu  = [None] + self.weights_gpu
-        
-        abs_err = -1
-        n_iter  = self.total_calls//step
-        # infty   = torch.tensor(torch.inf)
+            mat_cpu = [None] + self.weights
+            mat_gpu = [None] + self.weights_gpu
 
-        y = np.zeros(n_iter)
-        counts = {}
-        maxed = set()
-        # perturbation_dict = dict()
+        n_iter     = self.total_calls // step
+        n_stopping = int(n_iter/2)
+        
+        y       = np.zeros(n_iter)
+        counts  = {}
+        maxed   = set()
+        max_err = -1
+        stale   = 0      
+        n_done  = n_iter 
 
         iterator = tqdm(range(n_iter)) if verbose else range(n_iter)
 
         for i in iterator:
 
-            idx = self._sample_entries()
-            while idx in maxed:
-                idx = self._sample_entries()
+            idx = self._sample_entries(weighted=weighted)
+            key = tuple(int(i) for i in idx)
+            while key in maxed:
+                idx = self._sample_entries(weighted=weighted)
+                key = tuple(int(i) for i in idx)
 
-            counts[idx] = counts.get(idx, 0) + 1
-            if counts[idx] >= self.max_calls:
-                maxed.add(idx)
+            counts[key] = counts.get(key, 0) + 1
+            if counts[key] >= self.max_calls:
+                maxed.add(key)
 
-            # idx = self._sample_entries()
-            # for i in range(self._p):
-            #     j = (idx[0][i].item(), idx[1][i].item())
-            #     if j in perturbation_dict:
-            #         perturbation_dict[j] += step
-            #     else:
-            #         perturbation_dict.update({j: step})
- 
             if step > 1:
                 for _ in range(step):
                     X_[idx] = _nextafter(X_[idx], self.INFTY)
@@ -295,18 +325,30 @@ class AdvPerturbation:
             if self.tensor_prod:
                 mat_cpu[0] = X_
                 mat_gpu[0] = X_gpu
-
-            if not self.tensor_prod:
-                _y = self.model_err(X_, X_gpu)
-            else:
                 _y = product_err(mat_cpu, mat_gpu)
+            else:
+                _y = self.model_err(X_, X_gpu)
 
             y[i] = _y
 
-            if abs(_y) > abs_err:
-                abs_err  = abs(_y)
-                max_pert = {k:v for k, v in counts.items()}
-                
+            if _y > max_err:
+                max_err  = _y
+                max_pert = {k: v for k, v in counts.items()}
+                stale    = 0
+            else:
+                stale += 1
+
+            # NEW: early stopping
+            if early_stopping and stale >= n_stopping:
+                n_done = i + 1
+                if verbose:
+                    print(f"Early stop at iteration {n_done}/{n_iter}: "
+                        f"no new max in {n_stopping} iterations "
+                        f"(max err = {max_err:.4e})")
+                break
+
+        y = y[:n_done]  # NEW: drop the unused tail of the preallocated array
+
         return torch.Tensor(y).unsqueeze(0), max_pert
     
     
@@ -320,8 +362,7 @@ class AdvPerturbation:
             mat_cpu  = [None] + self.weights
             mat_gpu  = [None] + self.weights_gpu
         
-        abs_err      = 0
-        max_error    = 0
+        max_err    = -np.inf
         calls_to_max = 1
 
         for i in range(self.max_calls):
@@ -342,14 +383,24 @@ class AdvPerturbation:
             if not self.tensor_prod:
                 _err = self.model_err(X_, X_gpu)
             else:
-                _err = product_err(mat_cpu, mat_gpu)
+                _err = self._product_err(mat_cpu, mat_gpu)
 
-            if abs(_err) > abs_err:
+            if _err > max_err:
                 calls_to_max = i+1
-                abs_err      = abs(_err)
-                max_error    = _err
+                max_err   = _err
 
-        return calls_to_max, max_error
+        return calls_to_max, max_err
+    
+    def compute_adv_input(self)-> torch.Tensor:
+
+        X_adv        = self.input_matrix.clone()
+        idx, n_calls = self.solution
+
+        for _ in range(n_calls):
+            X_adv[idx] = torch.nextafter(X_adv[idx], self.INFTY)
+
+        self.X_adv = X_adv
+        return X_adv
 
     #####################################
     #                 PLOTTING
@@ -358,7 +409,7 @@ class AdvPerturbation:
         plot_max(y, y_hist, 
                  labels=['random'],
                  n_latent=self.n_input*self.n_latent,
-                 p= self.p,
+                 p= self.q,
                  fname=fname,
                  show_zero=show_zero)
         
@@ -404,11 +455,12 @@ class AdvPerturbation:
 
         active = set(genome.tolist())
         new_vals = set()
-        # rejection sampling — fast because k << total
         while len(new_vals) < n_mutations:
-            cand = random.randrange(self.total)
-            if cand not in active and cand not in new_vals:
-                new_vals.add(cand)
+            for cand in self._draw_flat(4 * n_mutations).tolist():
+                if cand not in active and cand not in new_vals:
+                    new_vals.add(cand)
+                    if len(new_vals) == n_mutations:
+                        break
 
         genome[clear_pos] = list(new_vals)
         return np.sort(genome)

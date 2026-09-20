@@ -16,7 +16,7 @@ from utils.plotting_utils import *
 
 
 
-class deltaNormPlots:
+class DeltaNormPlots:
 
     def __init__(self, n_latent: int, seed:int):
 
@@ -177,7 +177,7 @@ class ErrorPlots:
         if len(y_diff.shape) > 0:
             _y = vector_norm(y_diff, ord=np.inf).item()
         else:
-            _y = y_diff.item()
+            _y = abs(y_diff.item())
 
         return _y
 
@@ -281,7 +281,7 @@ class ErrorPlots:
                     Y  = self.compute_arch_diff(x, name, n_calls=n_calls)
 
                     if verbose and dtype==torch.bfloat16:
-                        y_max = torch.max(Y).values().item
+                        y_max = torch.max(Y).item()
                         if y_max > 0:
                             print("Found something my guy :)")
 
@@ -312,7 +312,7 @@ class ErrorPlots:
 
     def stats_plots(self, y_dist:torch.Tensor, func_names):
 
-        assert y.shape[0]==len(func_names), "Functions and samples do not match!!!"
+        assert y_dist.shape[0]==len(func_names), "Functions and samples do not match!!!"
 
         for y, name in list(zip(y_dist, func_names)):
 
@@ -335,7 +335,7 @@ class ErrorPlots:
             
 
 
-class qErrorPlots(errorPlots):
+class qErrorPlots(ErrorPlots):
 
     def __init__(self, model_name: str, seed:int, list_q, idx_samples:int=30):
 
@@ -451,7 +451,7 @@ if __name__=="__main__":
     print_sys_specs()
     
     # GROWTH OF DELTA
-    delta_plots = deltaNormPlots(n_latent=LATENT_DIM, seed=seed)
+    delta_plots = DeltaNormPlots(n_latent=LATENT_DIM, seed=seed)
 
     delta_plots.perturbation_size_plots(N_CALLS)
     delta_plots.perturbation_size_plots(N_CALLS_Q,  qs_list=Q_LIST)
