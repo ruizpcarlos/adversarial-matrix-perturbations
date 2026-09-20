@@ -139,12 +139,12 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
 
     print(f"Running benchmark")
     start_t = time.time()
-    y, idx  = benchmark.random_perturbation()
+    y, idx  = benchmark.random_perturbation(early_stopping=True)
     elapsed = time.time() - start_t
 
     max_err, _ = torch.max(y, dim=1)
     max_err = max_err.item()
-    budget = C
+    budget = y.shape[1] / MAX_CALLS
 
     record(algorithm_name, sample_idx, elapsed, target_err,
            y, max_err,

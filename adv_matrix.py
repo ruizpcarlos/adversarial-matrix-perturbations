@@ -272,34 +272,42 @@ class AdvPerturbation:
         return d
 
 
-    def random_perturbation(self, step=1, verbose =False):
+    def random_perturbation(self, 
+                            step=1, 
+                            weighted=False, 
+                            early_stopping = True, 
+                            verbose=False):
 
+        if weighted and not self.weighted_sampling:
+            raise ValueError(f"Passed weighted={weighted}  but there are no weights available for sampling")
+        
         _nextafter.reset()
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
 
         if self.tensor_prod:
-            mat_cpu  = [None] + self.weights
-            mat_gpu  = [None] + self.weights_gpu
-        
-        max_err = -np.inf
-        n_iter  = self.total_calls//step
-        # infty   = torch.tensor(torch.inf)
+            mat_cpu = [None] + self.weights
+            mat_gpu = [None] + self.weights_gpu
 
-        y = np.zeros(n_iter)
-        counts = {}
-        maxed = set()
-        # perturbation_dict = dict()
+        n_iter     = self.total_calls // step
+        n_stopping = int(n_iter/2)
+        
+        y       = np.zeros(n_iter)
+        counts  = {}
+        maxed   = set()
+        max_err = -1
+        stale   = 0      
+        n_done  = n_iter 
 
         iterator = tqdm(range(n_iter)) if verbose else range(n_iter)
 
         for i in iterator:
 
-            idx = self._sample_entries(weighted=False)
+            idx = self._sample_entries(weighted=weighted)
             key = tuple(int(i) for i in idx)
             while key in maxed:
-                idx = self._sample_entries(weighted=False)
+                idx = self._sample_entries(weighted=weighted)
                 key = tuple(int(i) for i in idx)
 
             counts[key] = counts.get(key, 0) + 1
@@ -317,18 +325,30 @@ class AdvPerturbation:
             if self.tensor_prod:
                 mat_cpu[0] = X_
                 mat_gpu[0] = X_gpu
-
-            if not self.tensor_prod:
-                _y = self.model_err(X_, X_gpu)
+                _y = product_err(mat_cpu, mat_gpu)
             else:
-                _y = self._product_err(mat_cpu, mat_gpu)
+                _y = self.model_err(X_, X_gpu)
 
             y[i] = _y
 
             if _y > max_err:
                 max_err  = _y
-                max_pert = {k:v for k, v in counts.items()}
-                
+                max_pert = {k: v for k, v in counts.items()}
+                stale    = 0
+            else:
+                stale += 1
+
+            # NEW: early stopping
+            if early_stopping and stale >= n_stopping:
+                n_done = i + 1
+                if verbose:
+                    print(f"Early stop at iteration {n_done}/{n_iter}: "
+                        f"no new max in {n_stopping} iterations "
+                        f"(max err = {max_err:.4e})")
+                break
+
+        y = y[:n_done]  # NEW: drop the unused tail of the preallocated array
+
         return torch.Tensor(y).unsqueeze(0), max_pert
     
     
