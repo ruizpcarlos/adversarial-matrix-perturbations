@@ -274,7 +274,7 @@ stat_results = adjusted_pvals(results,
 for algorithm_name, pvals in stat_results.items():
     print(f"{algorithm_name}: adj p-value = {pvals['p_adj']:.3e}")
 
-results["_wilcoxon"] = stat_results
+results["_wilcoxon_vs_random"] = stat_results
 
 save_dict_to_pickle(results, results_file)
 save_dict_to_pickle(results, results_file_drive)
