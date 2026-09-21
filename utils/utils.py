@@ -7,8 +7,11 @@ import torch
 import psutil  # pip install psutil
 import numpy as np
 import pandas as pd
+
+from scipy.stats import wilcoxon
+from statsmodels.stats.multitest import multipletests
 import torch.nn.functional as F
-from torch.linalg import vector_norm, multi_dot
+from torch.linalg import multi_dot
 import torchvision.models as models
 
 
@@ -212,3 +215,50 @@ def dict_to_plotting_data(y_stats):
     y_hist = df.error.values
 
     return df, y_hist
+
+
+def paired_compare_to_benchmark(data_dict, benchmark_key="RANDOM", alternative="greater"):
+
+    benchmark = np.array([r["max_err"] for r in data_dict[benchmark_key]])
+    out = {}
+
+    for name, records in data_dict.items():
+        if name == benchmark_key:
+            continue
+
+        v    = np.array([r["max_err"] for r in records])
+        diff = v - benchmark
+
+        if np.all(diff == 0):
+            out[name] = {"stat": np.nan, "p_value": 1.0, "median_diff": 0.0}
+            continue
+
+        stat, pv = wilcoxon(v, benchmark, alternative=alternative)
+        out[name] = {
+            "stat": stat,
+            "p_value": pv,
+            "median_diff": float(np.median(diff)),
+        }
+
+    return out
+
+def adjusted_pvals(data_dict, benchmark_key="RANDOM", alternative="greater", alpha=0.05):
+    """Paired test + FDR correction """
+    raw = paired_compare_to_benchmark(data_dict, 
+                                      benchmark_key=benchmark_key,
+                                      alternative=alternative)
+
+    algo_tags, pvals = zip(*[(k, v["p_value"]) for k, v in raw.items()])
+    reject, p_adj, _, _ = multipletests(pvals, alpha=alpha, method="fdr_bh")
+
+    adj_results = {}
+    for algorithm, p_a, rej in zip(algo_tags, p_adj, reject):
+            adj_results[algorithm] = {
+            "p_value": raw[algorithm]["p_value"],
+            "p_adj": p_a,
+            "significant": rej,
+            "median_diff": raw[algorithm]["median_diff"],
+        }
+
+    # df = pd.DataFrame(adj_results).sort_values("median_diff", ascending=False).reset_index(drop=True)
+    return adj_results

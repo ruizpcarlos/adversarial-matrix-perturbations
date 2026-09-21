@@ -5,9 +5,10 @@ import copy
 import numpy as np
 import torch.nn as nn
 
-from typing import Union, Optional, Tuple, Callable
 from tqdm import tqdm
-from torch.linalg import vector_norm
+from typing import Union, Optional, Tuple, Callable
+
+
 from functools import cached_property, update_wrapper
 from utils.utils import product_err, vector_distance, wrap_score
 from utils.plotting_utils import plot_max
@@ -144,7 +145,7 @@ class AdvPerturbation:
             self.weights     = None
             self.weights_gpu = None
             self.nn          = func
-            self.nn_gpu      = copy.deepcopy(self.nn).eval().to("cuda")             
+            self.nn_gpu      = copy.deepcopy(self.nn).eval().to("cuda")        
         else:
             raise TypeError(f"Received a {type(func)} as func: must be either torch.Tensor or nn.Module.")
 
