@@ -134,12 +134,12 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
                                 func_gpu=func_gpu,
                                 max_calls=MAX_CALLS,
                                 budget_calls=C, 
-                                weighted_sampling=WEIGHTED)
+                                weighted_sampling=True) # WEIGHTED arg is used for SimAnneal/GenAlgos
     target_err = benchmark.full_perturbation_err
 
     print(f"Running benchmark")
     start_t = time.time()
-    y, idx  = benchmark.random_perturbation(early_stopping=True)
+    y, _  = benchmark.random_perturbation(early_stopping=True)
     elapsed = time.time() - start_t
 
     max_err, _ = torch.max(y, dim=1)
@@ -150,9 +150,25 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
            y, max_err,
            [], budget)
 
-    # y is already written to disk by record()/save_tensor above; just
-    # track its path so the full history can be reconstructed later
-    # without keeping every sample's tensor in memory.
+    y_hist_paths.append(results[algorithm_name][-1]["data_path"])
+    save_y_hist_manifest()
+
+    # ---------------- RANDOM (benchmark) ----------------
+    algorithm_name = "RANDOM_W"
+    print(f"Running weighted benchmark")
+    start_t = time.time()
+    y, _  = benchmark.random_perturbation(weighted=True,
+                                            early_stopping=True)
+    elapsed = time.time() - start_t
+    
+    max_err, _ = torch.max(y, dim=1)
+    max_err = max_err.item()
+    budget = y.shape[1] / MAX_CALLS
+    
+    record(algorithm_name, sample_idx, elapsed, target_err,
+            y, max_err,
+            [], budget)
+    
     y_hist_paths.append(results[algorithm_name][-1]["data_path"])
     save_y_hist_manifest()
 
