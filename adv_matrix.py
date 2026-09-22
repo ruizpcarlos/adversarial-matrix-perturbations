@@ -218,7 +218,7 @@ class AdvPerturbation:
     def _draw_flat(self, num_samples: int, weighted=None):
         weighted = self.weighted_sampling if weighted is None else weighted
         if not weighted or self.sample_weights is None:
-            return torch.randint(self.total, (num_samples,))
+            return torch.randperm(self.total)[:num_samples]
         return torch.multinomial(self.sample_weights, num_samples, replacement=False)
     
 
