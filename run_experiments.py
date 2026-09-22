@@ -135,7 +135,7 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
                                 max_calls=MAX_CALLS,
                                 budget_calls=C, 
                                 weighted_sampling=True) # WEIGHTED arg is used for SimAnneal/GenAlgos
-    target_err = benchmark.full_perturbation_err
+    target_err = benchmark.baseline_err
 
     print(f"Running benchmark")
     start_t = time.time()

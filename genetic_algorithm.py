@@ -174,7 +174,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         scores = self.fitness[gen]
         best   = scores[:self.mating_pop]
         n_gen  = len(self.population)
-        y_line = self.full_perturbation_err
+        y_line = self.baseline_err
 
         generation_plot(scores, best, n_gen, y_line)
     
@@ -309,7 +309,7 @@ if __name__ == "__main__":
                                    q=0.01, # Not used in this instance, but required for init
                                    max_calls=MAX_CALLS, 
                                    budget_calls=c)
-        err = targ_aux.full_perturbation_err
+        err = targ_aux.baseline_err
         targets.append(err)
 
     results = []

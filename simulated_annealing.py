@@ -252,7 +252,7 @@ if __name__ == "__main__":
                                             budget_calls=c)
             targ_aux.init_temp(verbose=False)
             sa_instances.update({(j, q) : targ_aux})
-        err = targ_aux.full_perturbation_err
+        err = targ_aux.baseline_err
         targets.append(err)
 
     for ab, q in itertools.product(params, q_values):
