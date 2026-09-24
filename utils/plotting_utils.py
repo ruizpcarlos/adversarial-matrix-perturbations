@@ -367,7 +367,7 @@ def q_error_distributions(Ys, X_baseline, fname=None):
 
         ax2.set_title(f"Max Error distribution \n {n_values} unique values")
         ax2.hist(y_dist, bins=bins, orientation="horizontal")
-        ax2.axhline(y=max_err, c = "tab:grey", linestyle=":")
+        ax2.axhline(y=baseline, c = "tab:grey", linestyle=":")
 
     if fname is not None:
         fig.savefig(fname, bbox_inches="tight")
