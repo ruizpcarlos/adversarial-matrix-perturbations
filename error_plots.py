@@ -6,11 +6,10 @@ import itertools
 import numpy as np
 import torch.nn as nn
 
-import torchvision.models as models
-
 from tqdm import tqdm
 from torch.linalg import vector_norm
 
+from utils.cli import parse_args#, DTYPES
 from utils.utils import product_err, cum_stats, tensor_to_plotting_inputs, dict_to_plotting_data, print_sys_specs, load_model_and_weights
 from utils.plotting_utils import *
 
@@ -39,7 +38,7 @@ class DeltaNormPlots:
         return (flat_idx // self.n_latent, flat_idx % self.n_latent)
     
 
-    def perturbation_norm(self, q=None, n_calls=256):
+    def perturbation_norm(self, q=None, n_calls=256, n_calls_bf16 = 128):
 
         M = self.X
     
@@ -51,45 +50,50 @@ class DeltaNormPlots:
         M_bf16     = M.clone().to(dtype=torch.bfloat16)
         M_bf16_aux = M.clone().to(dtype=torch.bfloat16)
 
-        delta_fp32    = torch.zeros(2, n_calls)
-        delta_bf16 = torch.zeros(2, n_calls)
+        delta_fp32 = torch.zeros(2, n_calls)
+        delta_bf16 = torch.zeros(2, n_calls_bf16)
 
         for i in range(n_calls):
 
+            if i < n_calls_bf16:
+                if q is not None:
+                    M_bf16_aux[idx] = torch.nextafter(M_bf16_aux[idx], self.INFTY)
+                else:
+                    M_bf16_aux      = torch.nextafter(M_bf16_aux, self.INFTY)
+
+                delta_bf16[0, i] = vector_norm(M_bf16-M_bf16_aux, ord=np.inf).item()
+                delta_bf16[1, i] = vector_norm(M_bf16-M_bf16_aux).item()
+                
+                
             if q is not None:
-                M_aux[idx]      = torch.nextafter(M_aux[idx], self.INFTY)
-                M_bf16_aux[idx] = torch.nextafter(M_bf16_aux[idx], self.INFTY)
+                M_aux[idx] = torch.nextafter(M_aux[idx], self.INFTY)
             else:
                 M_aux      = torch.nextafter(M_aux, self.INFTY)
-                M_bf16_aux = torch.nextafter(M_bf16_aux, self.INFTY)
 
             delta_fp32[0, i] = vector_norm(M-M_aux, ord=np.inf).item()
             delta_fp32[1, i] = vector_norm(M-M_aux).item()
-            delta_bf16[0, i] = vector_norm(M_bf16-M_bf16_aux, ord=np.inf).item()
-            delta_bf16[1, i] = vector_norm(M_bf16-M_bf16_aux).item()
-
+            
         return delta_fp32, delta_bf16
 
 
-    def perturbation_size_plots(self, n_calls, qs_list=None):
+    def perturbation_size_plots(self, n_calls, n_calls_bf16, qs_list=None):
 
         DEFAULT_FNAME = "perturbation_norm"
 
         if qs_list is None:
-
             fname = DEFAULT_FNAME + ".png"
-            delta_f32, delta_bf16 = self.perturbation_norm(q=None,
-                                          n_calls=n_calls)
-            
+            delta_f32, delta_bf16 = self.perturbation_norm(n_calls=n_calls, 
+                                                           n_calls_bf16=n_calls_bf16)
         else:
-            output_shape = (len(qs_list),
-                            2,
-                            n_calls)
-            delta_f32  = torch.zeros(*output_shape)
-            delta_bf16 = torch.zeros(*output_shape)
+            delta_f32  = torch.zeros(len(qs_list),
+                                     2,
+                                     n_calls)
+            delta_bf16 = torch.zeros(len(qs_list),
+                                     2,
+                                     n_calls_bf16)
 
             for i, q in enumerate(qs_list):
-                aux_f32, aux_bf16 = self.perturbation_norm(q=q, n_calls=n_calls)
+                aux_f32, aux_bf16 = self.perturbation_norm(q=q, n_calls=n_calls, n_calls_bf16=n_calls_bf16)
                 delta_f32[i, :]   = aux_f32
                 delta_bf16[i, :]  = aux_bf16
 
@@ -121,16 +125,9 @@ class ErrorPlots:
         model, W   = load_model_and_weights(model_name)
         self.model = model
         self.W     = W
-                
-        # if model_name.upper().startswith("EFF"):
-        #     self.model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-        #     self.W     = torch.transpose(self.model.classifier[1].weight.data, 0, 1)
-        # else:
-        #     self.model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-        #     self.W     = torch.transpose(self.model.fc.weight.data, 0, 1)
             
         self.n_latent = self.W.shape[0]
-        self.W0 = torch.randn(self.n_latent, self.n_latent)
+        self.W0       = torch.randn(self.n_latent, self.n_latent)
 
         self.init_func_dict()
         
@@ -203,17 +200,24 @@ class ErrorPlots:
                         f"{tuple(_matrices[i].shape)} vs {tuple(_matrices[i+1].shape)} —"
                         f"dim {_matrices[i].shape[-1]} != {_matrices[i+1].shape[-2]}"
                     )
-            mat_cpu     = [None] + weights_cpu
-            mat_gpu     = [None] + weights_gpu
+            mat_cpu     = [X_] + weights_cpu
+            mat_gpu     = [X_gpu] + weights_gpu
             tensor_prod = True
-              
         elif isinstance(func, nn.Module):
             tensor_prod = False
 
-    
-        Y  = torch.zeros(n_calls)
+        iters = n_calls-1 if n_calls>1 else n_calls
 
-        for i in range(n_calls):
+        if n_calls > 1:
+            Y     = torch.zeros(n_calls)
+            Y[0]  = product_err(mat_cpu, mat_gpu) if tensor_prod else self.model_err(X_, X_gpu, func, func_gpu)
+            iters = n_calls-1
+        else:
+            Y     = torch.zeros(n_calls+1)
+            Y[0]  = product_err(mat_cpu, mat_gpu) if tensor_prod else self.model_err(X_, X_gpu, func, func_gpu)
+            iters = n_calls
+
+        for i in range(iters):
 
             if indices is not None:
                 X_[indices] = torch.nextafter(X_[indices], self.INFTY)
@@ -229,32 +233,40 @@ class ErrorPlots:
             else:
                 _err = self.model_err(X_, X_gpu, func, func_gpu)
 
-            Y[i] = _err
+            Y[i+1] = _err
 
         return Y#.unsqueeze(0)
 
-    def max_err(self, X, func_name, idx=None, n_calls=256):
+    def baseline_err(self, X, func_name, idx=None):
 
-        y_ = self.compute_arch_diff(X, func_name, indices=idx, 
-                                    n_calls=n_calls)
+        y_ = self.compute_arch_diff(X, func_name, 
+                                    n_calls=0)
 
-        return torch.max(y_, dim=0).values.item()
+        return y_.squeeze().item()
 
 
-    def error_distribution(self, n_calls, func_names=None, verbose=False):
+    def error_distribution(self, n_calls, n_calls_bf16,
+                            func_names=None, verbose=False):
 
         if isinstance(func_names, str):
             func_names = [func_names]
                   
         func_aux = self.func_names if not func_names else func_names
 
-        shape = (len(func_aux),
-                len(self.DTYPES),
-                self.n_samples,
-                n_calls
-        )
+        shape_bf16 = (len(func_aux),
+                    self.n_samples,
+                    n_calls_bf16
+                    )
+        shape_fp32 = (len(func_aux),
+                    self.n_samples,
+                    n_calls
+                    )
 
-        y_dist = torch.zeros(*shape)
+        y_dist_bf16 = torch.zeros(*shape_bf16)
+        y_dist_fp32 = torch.zeros(*shape_fp32)
+
+        call_list = [n_calls_bf16, n_calls]
+        y_list    = [y_dist_bf16, y_dist_fp32]
 
         for k, name in enumerate(func_aux):
 
@@ -278,16 +290,11 @@ class ErrorPlots:
                     pbar = enumerate(X)
 
                 for i, x in pbar:
-                    Y  = self.compute_arch_diff(x, name, n_calls=n_calls)
+                    Y  = self.compute_arch_diff(x, name, n_calls=call_list[j])
 
-                    if verbose and dtype==torch.bfloat16:
-                        y_max = torch.max(Y).item()
-                        if y_max > 0:
-                            print("Found something my guy :)")
+                    y_list[j][k, i, :] = Y.ravel()
 
-                    y_dist[k, j, i, :] = Y.ravel()
-
-        return y_dist
+        return y_list
     
 
     def plot_distributions(self, y_dist):
@@ -297,27 +304,34 @@ class ErrorPlots:
         plot_error_histograms(y_dist,  self.func_names, self.DTYPES, fname=fname)
 
 
-    def plot_err_signals(self, y_hist, funcname):
+    def plot_err_signals(self, y_hist, funcname, show_zero=False):
 
         idx = self.func_names.index(funcname)
-        err_bf16 = y_hist[idx, 0, :]
-        err_f32  = y_hist[idx, 1, :]
+
+        err_f32  = y_hist[0][idx]
+        err_bf16 = y_hist[1][idx]
         
         fname = f"error_signals_{funcname}.png"
         
         iter_error((err_bf16, err_f32),
-                        show_zero=False,
+                        show_zero=show_zero,
                         fname=fname)
 
 
-    def stats_plots(self, y_dist:torch.Tensor, func_names):
+    def stats_plots(self, y_dist:list[torch.Tensor], func_names):
 
-        assert y_dist.shape[0]==len(func_names), "Functions and samples do not match!!!"
+        if isinstance(func_names, str):
+            func_names = [func_names]
+        for y in y_dist:
+            assert y.shape[0]==len(func_names), "Inputdims and number of functions do not match!!!"
+                    
+        y_bf16 = y_dist[0]
+        y_fp32 = y_dist[1]
 
-        for y, name in list(zip(y_dist, func_names)):
+        for k, name in enumerate(func_names):
 
-            err_bf16 = y[0, :]
-            err_fp32 = y[1, :]
+            err_bf16 = y_bf16[k]
+            err_fp32 = y_fp32[k]
             
             stats_bf16 = cum_stats(err_bf16)
             stats_fp32 = cum_stats(err_fp32)
@@ -343,67 +357,64 @@ class qErrorPlots(ErrorPlots):
 
         self.list_q      = list_q
         self.idx_samples = idx_samples
-        # random.seed(seed)
-    
-        # self.INFTY  = torch.tensor(torch.inf)
-        # self.DTYPES = [torch.bfloat16, torch.float32]
+        self.X_img       = torch.randn(1, 3, 224, 224) #OVERWRITE X_img (this class samples over indices, not images)
 
-        # self.n_samples  = n_samples
-        # self.func_names = ["random",
-        #                    f"{model_name}_clf",
-        #                    model_name
-        #                    ]
-                
-        # if model_name.upper().startswith("EFF"):
-        #     self.model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-        #     self.W     = torch.transpose(self.model.classifier[1].weight.data, 0, 1)
-        # else:
-        #     self.model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-        #     self.W     = torch.transpose(self.model.fc.weight.data, 0, 1)
+
+    def flat_to_3d(self, idx, stride=None):
+
+        stride = self.n_latent if stride is None else stride
+
+        aux_idx = idx % (stride**2)
+        c = idx // (stride**2)
+        h = aux_idx // stride
+        w = aux_idx % stride
+        return c, h, w
+    
+    def sample_entries(self, X, num_samples=1):
             
-        # self.n_latent = self.W.shape[0]
-        # self.W0 = torch.randn(self.n_latent, self.n_latent)
+        flat_idx = torch.randperm(X.numel())[:num_samples]
 
-        # self.init_func_dict()
-        
-        # # Experiment inputs
-        # self.X0    = torch.randn(self.n_latent, self.n_latent)
-        # self.X_img = torch.randn(1, 3, 224, 224)
-    
-    def sample_entries(self, X, n_q=1):
-        
-        flat_idx = torch.randint(X.numel(), 
-                                     (n_q,)
-                                     )
-        
-        return (flat_idx // self.n_latent, flat_idx % self.n_latent)
+        if X.dim()>2:
+            indices = self.flat_to_3d(flat_idx, X.shape[2])
+            return (torch.zeros(num_samples, dtype=int), *indices)
+        else:
+            return (flat_idx // self.n_latent, flat_idx % self.n_latent)
+            
+    # def sample_entries(self, X, n_q=1):
+    #     flat_idx = torch.randint(X.numel(), 
+    #                                  (n_q,)
+    #                                  )
+    #     return (flat_idx // self.n_latent, flat_idx % self.n_latent)
 
 
-    def max_error_q(self, X, func_name, n_calls=256):
+    def max_error_q(self, X, func_name, n_calls=256, verbose=False):
+
+        n_calls = 128 if X.dtype==torch.bfloat16 else n_calls
 
         n_entries = X.numel()
         y_stats   = {}
 
-        for q in tqdm(self.list_q):
+        pbar = tqdm(self.list_q, desc="Computing max error for index %") if verbose else self.list_q
+
+        for q in pbar:
 
             n_q  = int(q*n_entries)
             y_max = torch.zeros(self.idx_samples)
 
             for i in range(self.idx_samples):
 
-                idx      = self.sample_entries(X, n_q)
-                print(idx)
-                y_max[i] = self.max_err(X, func_name, idx, n_calls)
-                # y   = self.compute_arch_diff(X, func_name, 
-                #                              idx,
-                #                              n_calls=n_calls)
+                idx = self.sample_entries(X, n_q)
+                y   = self.compute_arch_diff(X, func_name, 
+                                             idx,
+                                             n_calls=n_calls)
+                y_max[i] = torch.max(y).item()
             
             y_stats.update({f"{q}": y_max})
 
         return y_stats
 
 
-    def stats_plots_q(self, n_calls, func_names=None):
+    def stats_plots_q(self, n_calls, func_names=None, verbose=False):
 
         if isinstance(func_names, str):
             func_names = [func_names]
@@ -421,13 +432,13 @@ class qErrorPlots(ErrorPlots):
 
             X_bf16 = X_fp32.clone().to(self.DTYPES[0])
 
-            y_stats_bf16 = self.max_error_q(X_bf16, name, n_calls)
-            y_stats_fp32 = self.max_error_q(X_fp32, name, n_calls)
+            y_stats_bf16 = self.max_error_q(X_bf16, name, n_calls, verbose=verbose)
+            y_stats_fp32 = self.max_error_q(X_fp32, name, n_calls, verbose=verbose)
             plot_bf16    = dict_to_plotting_data(y_stats_bf16)
             plot_fp32    = dict_to_plotting_data(y_stats_fp32)
 
-            max_bf16 = self.max_err(X_bf16, name, n_calls=n_calls)
-            max_fp32 = self.max_err(X_fp32, name, n_calls=n_calls)
+            max_bf16 = self.baseline_err(X_bf16, name)
+            max_fp32 = self.baseline_err(X_fp32, name)
             max_errs  = (max_bf16, max_fp32)
 
             fname=f"max_errors_{name}_q.png"
@@ -439,46 +450,52 @@ class qErrorPlots(ErrorPlots):
 
 if __name__=="__main__":
 
-    seed = 161
-    model_name = "resnet"
+    SEED       = 161
+    model_name = "ResNet"
 
-    LATENT_DIM = 512
-    N_CALLS    = 1024
-    N_CALLS_Q  = 256
-    Q_LIST     = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+    args = parse_args()
+
+    n_samples = args.n_samples
+
+    LATENT_DIM   = 512
+    N_CALLS_BF16 = 256
+    N_CALLS      = 1024
+    N_CALLS_Q    = 256
+    Q_LIST       = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
 
     # Print CPU and GPU DATA
     print_sys_specs()
     
     # GROWTH OF DELTA
-    delta_plots = DeltaNormPlots(n_latent=LATENT_DIM, seed=seed)
+    delta_plots = DeltaNormPlots(n_latent=LATENT_DIM, seed=SEED)
 
-    delta_plots.perturbation_size_plots(N_CALLS)
-    delta_plots.perturbation_size_plots(N_CALLS_Q,  qs_list=Q_LIST)
+    delta_plots.perturbation_size_plots(N_CALLS, N_CALLS_BF16)
+    delta_plots.perturbation_size_plots(N_CALLS_Q, N_CALLS_BF16,
+                                        qs_list=Q_LIST)
 
 
     # DTYPE - MODEL HISTOGRAMS
     funcname = f'{model_name}_clf'
     
-    err_plots = ErrorPlots(model_name=model_name, seed=seed)
-    y_hist    = err_plots.error_distribution(N_CALLS)
+    err_plots = ErrorPlots(model_name=model_name, seed=SEED)
+    y_hist    = err_plots.error_distribution(N_CALLS, N_CALLS_BF16)
 
     err_plots.plot_distributions(y_hist)
     err_plots.plot_err_signals(y_hist, funcname)
 
 
     # CUMULATIVE ERROR DISTRIBUTIONS
-    from_cache = True
+    from_cache = False
     pkl_name   = "error_dist.pkl"
-        
-    N_SAMPLES  = 30
 
     acc_err_plots = ErrorPlots(model_name=model_name, 
-                               seed=seed, 
-                               n_samples=N_SAMPLES)
+                               seed=SEED, 
+                               n_samples=n_samples)
                       
     if not from_cache:
-        y_dist = acc_err_plots.error_distribution(N_CALLS, func_names=funcname)
+        y_dist = acc_err_plots.error_distribution(N_CALLS, N_CALLS_BF16,
+                                                  verbose=True,
+                                                  func_names=funcname)
         with open(pkl_name, 'wb') as f:
                     pickle.dump(y_dist, f)
     else:
@@ -490,8 +507,8 @@ if __name__=="__main__":
 
     # MAX ERROR DISTRIBUTIONS FOR Q
     err_plots_q = qErrorPlots(model_name=model_name, 
-                              seed=seed,
+                              seed=SEED,
                               list_q=Q_LIST, 
-                              idx_samples=N_SAMPLES)
+                              idx_samples=n_samples)
 
     err_plots_q.stats_plots_q(N_CALLS_Q, func_names=funcname)

@@ -2,6 +2,7 @@ import time
 import pickle
 import os
 import copy
+import argparse
 
 import random
 import torch    
@@ -11,14 +12,16 @@ from adv_matrix import AdvPerturbation #,_nextafter
 from simulated_annealing import SimulatedAnnealingSearch
 from genetic_algorithm import AdversarialGeneticAlgorithm
 from utils.utils import save_dict_to_pickle, load_model_and_weights, adjusted_pvals
-from utils.cli import parse_args, DTYPES
+from utils.cli import add_common_args, DTYPES
 
 DRIVE_DIR = "/content/drive/MyDrive/exp_results"
 
 # ----------------------------------------------------------------------
 # CLI args
 # ----------------------------------------------------------------------
-args = parse_args()
+parser = argparse.ArgumentParser()
+add_common_args(parser, dtype=True, weighted=True, matmul=True)
+args = parser.parse_args()
 
 SEED       = 161
 model_name = "ResNet"
@@ -30,8 +33,7 @@ MATMUL    = args.matmul
 
 # Tag used in output names so weighted / unweighted / fp32 / bf16 runs never overwrite each other
 DTYPE_TAG = "bf16" if dtype == torch.bfloat16 else "fp32"
-RUN_TAG   = f"{model_name}" + ("Weights" if MATMUL else "")  + f"_{DTYPE_TAG}_{SEED}" + ("_weighted" if WEIGHTED else "")
-
+RUN_TAG   = f"{model_name}" + ("_W" if MATMUL else "")  + f"_{DTYPE_TAG}_{SEED}" + ("_weighted" if WEIGHTED else "")
 
 random.seed(SEED)
 torch.manual_seed(SEED)

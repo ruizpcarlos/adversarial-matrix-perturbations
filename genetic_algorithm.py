@@ -1,6 +1,8 @@
 import time
-import sys
+import argparse
 import gc
+import os
+
 import torch
 import random
 import itertools
@@ -13,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from adv_matrix import AdvPerturbation, FuncType
 from utils.utils import save_dict_to_pickle, load_model_and_weights
 from utils.plotting_utils import generation_plot
+from utils.cli import add_common_args, DTYPES
 
 
 class AdversarialGeneticAlgorithm(AdvPerturbation):
@@ -265,24 +268,32 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
 if __name__ == "__main__":
 
-    n_test = int(sys.argv[1])   # number of repeated runs per (pop_size, p) configuration
-    data   = sys.argv[2]
+    parser = argparse.ArgumentParser()
+    add_common_args(parser, dtype=True, weighted=True, matmul=True)
+    args = parser.parse_args()
 
+    SEED       = 420
     model_name = "ResNet"
-    seed       = 420
-    dtype      = torch.bfloat16 if data.upper().startswith("BF") else torch.float32
 
-    random.seed(seed)
-    torch.manual_seed(seed)
+    n_test   = args.n_samples
+    dtype    = DTYPES[args.dtype]
+    WEIGHTED = args.weighted
+    MATMUL   = args.matmul
+
+    # Tag used in output names so weighted / unweighted / fp32 / bf16 runs never overwrite each other
+    DTYPE_TAG = "bf16" if dtype == torch.bfloat16 else "fp32"
+    RUN_TAG   = f"{model_name}" + ("_W" if MATMUL else "")  + f"_{DTYPE_TAG}_{SEED}" + ("_weighted" if WEIGHTED else "")
+
+    random.seed(SEED)
+    torch.manual_seed(SEED)
+
+    DRIVE_DIR  = "/content/drive/MyDrive/exp_results/gridsearch"
+    fname      = f"genAlgo_gridsearch_{RUN_TAG}.pkl"
+    drive_path = os.path.join(DRIVE_DIR, fname)
+
     # ------------------------------------------------------------------
     # EXPERIMENT INPUTS
     # ------------------------------------------------------------------
-    # if model_name.upper().startswith("EFF"):
-    #     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-    #     W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
-    # else:
-    #     model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-    #     W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
 
     model, W = load_model_and_weights(model_name, dtype)
     n_latent = W.shape[0]
@@ -294,7 +305,7 @@ if __name__ == "__main__":
 
     MAX_CALLS      = 32 # if data.upper().startswith("BF") else 128
     c              = 1000  # total budget of calls to compute_max_err
-    early_stopping = (not data.upper().startswith("BF")) # Deactivate early stopping for bf16
+    early_stopping = (not DTYPE_TAG.upper().startswith("BF")) # Deactivate early stopping for bf16
 
     # ------------------------------------------------------------------
     # Grid search over population size and perturbation fraction
@@ -313,7 +324,6 @@ if __name__ == "__main__":
         targets.append(err)
 
     results = []
-    fname   = f"grid_search_{model_name}_{data}_{seed}.pkl"
 
     for pop_size, q in itertools.product(pop_sizes, q_values):
         print(f"Running test for pop_size={pop_size}, q={q:.2f}")
@@ -383,6 +393,7 @@ if __name__ == "__main__":
         })
 
         save_dict_to_pickle(results, filename=fname)
+        save_dict_to_pickle(results, filename=drive_path)        
 
         print(f"  -> mean err% ={run_err_ratio.mean():.4e} (std={run_errs.std():.4e}) "
               f"{(100*success_pct):.2f}% success over {n_test} trials\n")
@@ -398,37 +409,3 @@ if __name__ == "__main__":
           f"over {n_test} trials "
           f"(mean ulp_calls = {best['mean_ulp_calls']:.0f}, "
           f"mean time = {best['mean_time_s']:.2f}s)")
-
-    # # ------------------------------------------------------------------
-    # # Heatmap of mean best error over the (pop_size, q) grid
-    # # ------------------------------------------------------------------
-    # err_grid = np.array([r["mean_err_pct"] for r in results]).reshape(
-    #     len(pop_sizes), len(q_values)
-    # )
-
-    # plt.figure()
-    # plt.imshow(err_grid, aspect="auto", origin="lower")
-    # plt.colorbar(label=f"Mean best max error (n_test={n_test})")
-    # plt.xticks(range(len(q_values)), q_values)
-    # plt.yticks(range(len(pop_sizes)), pop_sizes)
-    # plt.xlabel("q (perturbation %)")
-    # plt.ylabel("Population Size (P)")
-    # plt.title("Grid search: pop_size vs q")
-    # plt.tight_layout()
-    # plt.show()
-
-
-    # succcess_grid = np.array([r["success_pct"] for r in results]).reshape(
-    #         len(pop_sizes), len(q_values)
-    #     )
-
-    # plt.figure()
-    # plt.imshow(succcess_grid, aspect="auto", origin="lower")
-    # plt.colorbar(label=f"Success percentage (n_test={n_test})")
-    # plt.xticks(range(len(q_values)), q_values)
-    # plt.yticks(range(len(pop_sizes)), pop_sizes)
-    # plt.xlabel("q (perturbation %)")
-    # plt.ylabel("Population Size (P)")
-    # plt.title("Grid search: pop_size vs q")
-    # plt.tight_layout()
-    # plt.show()
