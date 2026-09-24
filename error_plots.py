@@ -1,4 +1,6 @@
 import pickle
+import os
+
 import torch
 import random
 import copy
@@ -13,7 +15,7 @@ from utils.cli import parse_args#, DTYPES
 from utils.utils import product_err, cum_stats, tensor_to_plotting_inputs, dict_to_plotting_data, print_sys_specs, load_model_and_weights
 from utils.plotting_utils import *
 
-
+PLOT_DIR = "preliminary_analysis"
 
 class DeltaNormPlots:
 
@@ -99,6 +101,7 @@ class DeltaNormPlots:
 
             fname = DEFAULT_FNAME + "_q.png"
 
+        fname = os.path.join(PLOT_DIR, fname)
         delta_growth_plots(delta_f32, delta_bf16, 
                             qs_list=qs_list, 
                             fname=fname)
@@ -299,7 +302,7 @@ class ErrorPlots:
 
     def plot_distributions(self, y_dist):
 
-        fname = "dtype_model_err.png"
+        fname = os.path.join(PLOT_DIR, "dtype_model_err.png")
 
         plot_error_histograms(y_dist,  self.func_names, self.DTYPES, fname=fname)
 
@@ -311,7 +314,7 @@ class ErrorPlots:
         err_f32  = y_hist[0][idx]
         err_bf16 = y_hist[1][idx]
         
-        fname = f"error_signals_{funcname}.png"
+        fname = os.path.join(PLOT_DIR, f"error_signals_{funcname}.png")
         
         iter_error((err_bf16, err_f32),
                         show_zero=show_zero,
@@ -339,11 +342,11 @@ class ErrorPlots:
             bf16_data = tensor_to_plotting_inputs(err_bf16)
             fp32_data = tensor_to_plotting_inputs(err_fp32)
 
-            fname1 = f"acc_distributions_{name}.png"
+            fname1 = os.path.join(PLOT_DIR, f"acc_distributions_{name}.png")
             iter_error_distributions((bf16_data, fp32_data),
                                         fname=fname1)
             
-            fname2 = f"cum_stats_{name}.png"
+            fname2 = os.path.join(PLOT_DIR, f"cum_stats_{name}.png")
             plot_cum_stats([stats_fp32, stats_bf16],
                                         fname=fname2)
             
@@ -441,7 +444,7 @@ class qErrorPlots(ErrorPlots):
             max_fp32 = self.baseline_err(X_fp32, name)
             max_errs  = (max_bf16, max_fp32)
 
-            fname=f"max_errors_{name}_q.png"
+            fname = os.path.join(PLOT_DIR, f"max_errors_{name}_q.png")
             q_error_distributions([plot_bf16, plot_fp32], max_errs, 
                                   fname=fname)
 
@@ -462,6 +465,8 @@ if __name__=="__main__":
     N_CALLS      = 1024
     N_CALLS_Q    = 256
     Q_LIST       = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+
+    os.makedirs(PLOT_DIR, exist_ok=True)
 
     # Print CPU and GPU DATA
     print_sys_specs()
