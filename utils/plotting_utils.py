@@ -325,7 +325,7 @@ def plot_cum_stats(Y, fname=None):
     plt.show()
 
 
-def q_error_distributions(Ys, Xmax, fname=None):
+def q_error_distributions(Ys, X_baseline, fname=None):
     """
     Ys: list of dictionaries of numpy arrays for plotting
     """
@@ -346,7 +346,7 @@ def q_error_distributions(Ys, Xmax, fname=None):
 
         df = Y[0]
         y_dist = Y[1]
-        max_err = Xmax[row]
+        baseline = X_baseline[row]
 
         fp = "fp32" if row==1 else "bf16"
 
@@ -354,16 +354,16 @@ def q_error_distributions(Ys, Xmax, fname=None):
         ax1.set_title(f"Max Error Distributions ({fp})")
         ax1.set_ylabel("Max Error")
         ax1.set_xlabel("% of perturbed indices (q)")
-        ax1.axhline(y=max_err,
+        ax1.axhline(y=baseline,
                     c = "tab:grey", linestyle=":",
-                    # label = "Max err for full matrix perturbation"
+                    label = "Non-perturbed matrix error"
                     )
-        
+        ax1.legend()
+
         n_values = np.unique(y_dist).shape[0]
         bins = max(0, min(26, n_values))
 
         fp  = "Half" if row==0 else "Single"
-        fp2 = "bf16" if row==0 else "fp32"
 
         ax2.set_title(f"Max Error distribution \n {n_values} unique values")
         ax2.hist(y_dist, bins=bins, orientation="horizontal")

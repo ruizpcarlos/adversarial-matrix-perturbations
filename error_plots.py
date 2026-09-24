@@ -464,7 +464,7 @@ if __name__=="__main__":
     N_CALLS_BF16 = 256
     N_CALLS      = 1024
     N_CALLS_Q    = 256
-    Q_LIST       = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+    Q_LIST       = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9]
 
     os.makedirs(PLOT_DIR, exist_ok=True)
 
