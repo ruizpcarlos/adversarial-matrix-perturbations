@@ -1,4 +1,5 @@
-import sys
+import argparse
+import os
 import time
 import itertools
 
@@ -11,7 +12,7 @@ from tqdm import tqdm
 
 from adv_matrix import AdvPerturbation, FuncType
 from utils.utils import save_dict_to_pickle, load_model_and_weights
-
+from utils.cli import add_common_args, DTYPES
 
 class SimulatedAnnealingSearch(AdvPerturbation):
 
@@ -196,26 +197,36 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
 if __name__ == "__main__":
 
-    n_test = int(sys.argv[1])   # number of repeated runs per (pop_size, p) configuration
-    data   = sys.argv[2]
+    # ----------------------------------------------------------------------
+    # CLI args
+    # ----------------------------------------------------------------------
+    parser = argparse.ArgumentParser()
+    add_common_args(parser, dtype=True, weighted=True, matmul=True)
+    args = parser.parse_args()
 
+    SEED       = 420
     model_name = "ResNet"
-    seed       = 420
-    dtype      = torch.bfloat16 if data.upper().startswith("BF") else torch.float32
 
-    random.seed(seed)
-    torch.manual_seed(seed)
+    n_test   = args.n_samples
+    dtype    = DTYPES[args.dtype]
+    WEIGHTED = args.weighted
+    MATMUL   = args.matmul
+
+    # Tag used in output names so weighted / unweighted / fp32 / bf16 runs never overwrite each other
+    DTYPE_TAG = "bf16" if dtype == torch.bfloat16 else "fp32"
+    RUN_TAG   = f"{model_name}" + ("_W" if MATMUL else "")  + f"_{DTYPE_TAG}_{SEED}" + ("_weighted" if WEIGHTED else "")
+
+    random.seed(SEED)
+    torch.manual_seed(SEED)
+
+    
+    DRIVE_DIR  = "/content/drive/MyDrive/exp_results/gridsearch"
+    fname      = f"simAnneal_gridsearch_{RUN_TAG}.pkl"
+    drive_path = os.path.join(DRIVE_DIR, fname)
 
     # ------------------------------------------------------------------
     # EXPERIMENT INPUTS
     # ------------------------------------------------------------------
-    # if model_name.upper().startswith("EFF"):
-    #     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-    #     W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
-    # else:
-    #     model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-    #     W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
-
     model, W = load_model_and_weights(model_name, dtype)                
     n_latent = W.shape[0]
 
@@ -235,9 +246,7 @@ if __name__ == "__main__":
     params   = list(zip(alphas, betas))
     q_values = [0.05, 0.1]
 
-    results = []
-    fname   = f"sa_gridsearch_{model_name}_{data}_{seed}.pkl"
-
+    results      = []
     targets      = []
     sa_instances = {}
 
@@ -252,7 +261,7 @@ if __name__ == "__main__":
                                             budget_calls=c)
             targ_aux.init_temp(verbose=False)
             sa_instances.update({(j, q) : targ_aux})
-        err = targ_aux.full_perturbation_err
+        err = targ_aux.baseline_err
         targets.append(err)
 
     for ab, q in itertools.product(params, q_values):
@@ -328,6 +337,7 @@ if __name__ == "__main__":
             })
 
         save_dict_to_pickle(results, filename=fname)
+        save_dict_to_pickle(results, filename=drive_path) 
 
         print(f"  -> mean err% ={run_err_ratio.mean():.4e} (std={run_errs.std():.4e}) "
                 f"{(100*success_pct):.2f}% success over {n_test} trials\n")

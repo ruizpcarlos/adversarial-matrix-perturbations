@@ -1,52 +1,53 @@
-import sys
 import time
 import pickle
 import os
+import copy
+import argparse
 
 import random
-import torch
-import numpy as np
-import torchvision.models as models
-
-from scipy.stats import mannwhitneyu
+import torch    
 from tqdm import tqdm
 
 from adv_matrix import AdvPerturbation #,_nextafter
 from simulated_annealing import SimulatedAnnealingSearch
 from genetic_algorithm import AdversarialGeneticAlgorithm
-from utils.utils import save_dict_to_pickle #plot_max, annealing_plot, track_evol_, pad_to_match
+from utils.utils import save_dict_to_pickle, load_model_and_weights, adjusted_pvals
+from utils.cli import add_common_args, DTYPES
 
 DRIVE_DIR = "/content/drive/MyDrive/exp_results"
 
 # ----------------------------------------------------------------------
 # CLI args
 # ----------------------------------------------------------------------
-n_samples = int(sys.argv[1])
-data      = sys.argv[2]
+parser = argparse.ArgumentParser()
+add_common_args(parser, dtype=True, weighted=True, matmul=True)
+args = parser.parse_args()
 
 SEED       = 161
 model_name = "ResNet"
 
+n_samples = args.n_samples
+dtype     = DTYPES[args.dtype]
+WEIGHTED  = args.weighted
+MATMUL    = args.matmul
+
+# Tag used in output names so weighted / unweighted / fp32 / bf16 runs never overwrite each other
+DTYPE_TAG = "bf16" if dtype == torch.bfloat16 else "fp32"
+RUN_TAG   = f"{model_name}" + ("_W" if MATMUL else "")  + f"_{DTYPE_TAG}_{SEED}" + ("_weighted" if WEIGHTED else "")
+
 random.seed(SEED)
 torch.manual_seed(SEED)
-
-dtype = torch.bfloat16 if data.upper().startswith("BF") else torch.get_default_dtype()
 
 # ----------------------------------------------------------------------
 # Model / weight matrix setup
 # ----------------------------------------------------------------------
-if model_name.upper().startswith("EFF"):
-    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-    W = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
-else:
-    model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1).eval()
-    W = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
+model, W = load_model_and_weights(model_name, dtype=dtype)
 
 n_latent = W.shape[0]
 n_input  = n_latent
 
-func     = W
-func_gpu = func.to('cuda')
+func     = W if MATMUL else model
+func_gpu = func.to('cuda') if MATMUL else copy.deepcopy(func).eval().to("cuda")
 
 MAX_CALLS = 32
 C = 1_000
@@ -60,13 +61,13 @@ L0            = 5
 sa_params     = list(zip([0.8, 0.85], [1.04, 1.035]))  # (alpha, beta)
 ga_pop_sizes  = [50, 100]
 
-results_file =  f"results_{model_name}_{data}_{SEED}.pkl"
+results_file =  f"results_{RUN_TAG}.pkl"
 results_file_drive = os.path.join(DRIVE_DIR,
                                   results_file)
 
 # Directory where per-sample raw tensors get streamed to disk, instead of
 # being held in memory for the whole run.
-TENSOR_DIR = f"tensor_data_{model_name}_{data}_{SEED}"
+TENSOR_DIR = f"tensor_data_{RUN_TAG}"
 TENSOR_DIR = os.path.join(DRIVE_DIR, TENSOR_DIR)
 # os.makedirs(TENSOR_DIR, exist_ok=True)
 
@@ -78,7 +79,7 @@ results = {}
 # which per-sample files (already written by save_tensor for RANDOM) make
 # it up, and periodically flush that manifest to disk instead of holding
 # growing tensor data in RAM.
-Y_HIST_MANIFEST_FILE = f"y_hist_manifest_{model_name}_{data}_{SEED}.pkl"
+Y_HIST_MANIFEST_FILE = f"y_hist_manifest_{RUN_TAG}.pkl"
 Y_HIST_MANIFEST_FILE = os.path.join(DRIVE_DIR, Y_HIST_MANIFEST_FILE)
 y_hist_paths = []
 
@@ -134,12 +135,13 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
                                 q = q,
                                 func_gpu=func_gpu,
                                 max_calls=MAX_CALLS,
-                                budget_calls=C)
-    target_err = benchmark.full_perturbation_err
+                                budget_calls=C, 
+                                weighted_sampling=True) # WEIGHTED arg is used for SimAnneal/GenAlgos
+    target_err = benchmark.baseline_err
 
     print(f"Running benchmark")
     start_t = time.time()
-    y, idx  = benchmark.random_perturbation(early_stopping=True)
+    y, _  = benchmark.random_perturbation(early_stopping=True)
     elapsed = time.time() - start_t
 
     max_err, _ = torch.max(y, dim=1)
@@ -150,9 +152,25 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
            y, max_err,
            [], budget)
 
-    # y is already written to disk by record()/save_tensor above; just
-    # track its path so the full history can be reconstructed later
-    # without keeping every sample's tensor in memory.
+    y_hist_paths.append(results[algorithm_name][-1]["data_path"])
+    save_y_hist_manifest()
+
+    # ---------------- RANDOM (benchmark) ----------------
+    algorithm_name = "RANDOM_W"
+    print(f"Running weighted benchmark")
+    start_t = time.time()
+    y, _  = benchmark.random_perturbation(weighted=True,
+                                            early_stopping=True)
+    elapsed = time.time() - start_t
+    
+    max_err, _ = torch.max(y, dim=1)
+    max_err = max_err.item()
+    budget = y.shape[1] / MAX_CALLS
+    
+    record(algorithm_name, sample_idx, elapsed, target_err,
+            y, max_err,
+            [], budget)
+    
     y_hist_paths.append(results[algorithm_name][-1]["data_path"])
     save_y_hist_manifest()
 
@@ -160,11 +178,12 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
     for alpha, beta in sa_params:
         algorithm_name = f"SA_{int(100 * alpha)}"
         sim_anneal = SimulatedAnnealingSearch(X, 
-                                              func,
-                                              q=q,
-                                              func_gpu=func_gpu, 
-                                              max_calls=MAX_CALLS,
-                                              budget_calls=C)
+                                            func,
+                                            q=q,
+                                            func_gpu=func_gpu, 
+                                            max_calls=MAX_CALLS,
+                                            budget_calls=C, 
+                                            weighted_sampling=WEIGHTED)
 
         
         print(f"Running {algorithm_name}")
@@ -193,7 +212,8 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
             func_gpu=func_gpu,
             max_calls=MAX_CALLS,
             budget_calls=C,
-            pop_size=pop_size,
+            pop_size=pop_size, 
+            weighted_sampling=WEIGHTED
         )
 
         print(f"Running {algorithm_name}")
@@ -224,38 +244,39 @@ print(f"Saved results for {n_samples} samples across "
       f"{len(results)} algorithms to {results_file}")
 
 ############################################
-##         MANN-WHITNEY U TEST
+##         WILCOXON PAIRED TEST
 ############################################
 # Compares each algorithm's max_err distribution (across the n_samples runs)
 # against the RANDOM benchmark, testing whether it tends to find larger
 # perturbation errors (alternative='greater').
 
 benchmark_name = "RANDOM"
-benchmark_err   = [r["max_err"]      for r in results[benchmark_name]]
-benchmark_calls = [r["budget_calls"] for r in results[benchmark_name]]
-mean_benchmark_calls = np.mean(benchmark_calls)
+# benchmark_err   = [r["max_err"]      for r in results[benchmark_name]]
+# benchmark_calls = [r["budget_calls"] for r in results[benchmark_name]]
+# mean_benchmark_calls = np.mean(benchmark_calls)
 
-mwu_results = {}
+stat_results = adjusted_pvals(results, 
+                              baseline_key="RANDOM", 
+                              alternative="greater")
 
-for algorithm_name, records in results.items():
-    if algorithm_name == benchmark_name:
-        continue
+# for algorithm_name, records in results.items():
+#     if algorithm_name == benchmark_name:
+#         continue
 
-    alg_err   = [r["max_err"]      for r in records]
-    alg_calls = [r["budget_calls"] for r in records]
+#     alg_err   = [r["max_err"]      for r in records]
+#     alg_calls = [r["budget_calls"] for r in records]
 
-    stat, pv = mannwhitneyu(alg_err, benchmark_err, alternative="greater")
-    calls_as_pct = 100 * (np.mean(alg_calls) / mean_benchmark_calls - 1)
+#     stat, pv = wilcoxon(alg_err, benchmark_err, alternative="greater")
+#     # calls_as_pct = 100 * (np.mean(alg_calls) / mean_benchmark_calls - 1)
 
-    mwu_results[algorithm_name] = {
-        "u_statistic":  stat,
-        "p_value":      pv,
-        "calls_vs_random_pct": calls_as_pct,
-    }
+#     stat_results[algorithm_name] = {
+#         "u_statistic":  stat,
+#         "p_value":      pv,
+#     }
+for algorithm_name, pvals in stat_results.items():
+    print(f"{algorithm_name}: adj p-value = {pvals['p_adj']:.3e}")
 
-    print(f"{algorithm_name}: p-value = {pv:.3e} -- ULP calls = {calls_as_pct:.2f}%")
-
-results["_mann_whitney_vs_random"] = mwu_results
+results["_wilcoxon_vs_random"] = stat_results
 
 save_dict_to_pickle(results, results_file)
 save_dict_to_pickle(results, results_file_drive)

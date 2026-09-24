@@ -5,9 +5,10 @@ import copy
 import numpy as np
 import torch.nn as nn
 
-from typing import Union, Optional, Tuple, Callable
 from tqdm import tqdm
-from torch.linalg import vector_norm
+from typing import Union, Optional, Tuple, Callable
+
+
 from functools import cached_property, update_wrapper
 from utils.utils import product_err, vector_distance, wrap_score
 from utils.plotting_utils import plot_max
@@ -144,7 +145,7 @@ class AdvPerturbation:
             self.weights     = None
             self.weights_gpu = None
             self.nn          = func
-            self.nn_gpu      = copy.deepcopy(self.nn).eval().to("cuda")             
+            self.nn_gpu      = copy.deepcopy(self.nn).eval().to("cuda")        
         else:
             raise TypeError(f"Received a {type(func)} as func: must be either torch.Tensor or nn.Module.")
 
@@ -186,8 +187,12 @@ class AdvPerturbation:
 
 
     @cached_property
-    def full_perturbation_err(self):
-        _, err = self.compute_max_err()
+    def baseline_err(self):
+        """
+        Calculates the error  
+        d (y_gpu, y_cpu) for the non perturbed matrix
+        """
+        _, err = self.compute_max_err(ulp_calls=0)
         self.compute_max_err.reset()
         return err
         
@@ -213,7 +218,7 @@ class AdvPerturbation:
     def _draw_flat(self, num_samples: int, weighted=None):
         weighted = self.weighted_sampling if weighted is None else weighted
         if not weighted or self.sample_weights is None:
-            return torch.randint(self.total, (num_samples,))
+            return torch.randperm(self.total)[:num_samples]
         return torch.multinomial(self.sample_weights, num_samples, replacement=False)
     
 
@@ -352,22 +357,26 @@ class AdvPerturbation:
         return torch.Tensor(y).unsqueeze(0), max_pert
     
     
-    def compute_max_err(self, indices: Optional[Tuple[torch.Tensor, ...]] = None) -> Tuple[int, float]:
+    def compute_max_err(self, 
+                        ulp_calls: Optional[int] = None,
+                        indices: Optional[Tuple[torch.Tensor, ...]] = None) -> Tuple[int, float]:
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
         # infty = torch.tensor(torch.inf)
 
         if self.tensor_prod:
-            mat_cpu  = [None] + self.weights
-            mat_gpu  = [None] + self.weights_gpu
+            mat_cpu = [X_] + self.weights
+            mat_gpu = [X_gpu] + self.weights_gpu
+            max_err = self._product_err(mat_cpu, mat_gpu)
+        else:
+            max_err = self.model_err(X_, X_gpu)
+                
+        calls_to_max = 0
+        ulp_calls = self.max_calls-1 if ulp_calls is None else ulp_calls
         
-        max_err    = -np.inf
-        calls_to_max = 1
+        for i in range(ulp_calls):
 
-        for i in range(self.max_calls):
-
-            # M_[indices] = nextafter(M_[indices], 1)
             if indices is not None:
                 # torch wrapped in counter
                 X_[indices] = _nextafter(X_[indices], self.INFTY)
@@ -379,12 +388,10 @@ class AdvPerturbation:
             if self.tensor_prod:
                 mat_cpu[0] = X_
                 mat_gpu[0] = X_gpu
-
-            if not self.tensor_prod:
-                _err = self.model_err(X_, X_gpu)
-            else:
                 _err = self._product_err(mat_cpu, mat_gpu)
-
+            else:
+                _err = self.model_err(X_, X_gpu)
+                            
             if _err > max_err:
                 calls_to_max = i+1
                 max_err   = _err
