@@ -83,7 +83,7 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
             self.fitness[-2]    = None
 
     def _compute_max_err_threadsafe(self, idx):
-        result = self.compute_max_err.func(idx)   # bypass CallTracker's own increment (not thread-safe as-is)
+        result = self.compute_max_err.func(indices=idx)   # bypass CallTracker's own increment (not thread-safe as-is)
         with self._call_lock:
             self.compute_max_err.call_count += 1
         return result   
@@ -303,9 +303,9 @@ if __name__ == "__main__":
     X_img = torch.randn(n_test, 1, 3, 224, 224,
                         dtype=dtype)
 
-    MAX_CALLS      = 32 # if data.upper().startswith("BF") else 128
-    c              = 1000  # total budget of calls to compute_max_err
-    early_stopping = (not DTYPE_TAG.upper().startswith("BF")) # Deactivate early stopping for bf16
+    MAX_CALLS = 32 
+    c         = 1000  # total budget of calls to compute_max_err
+    # early_stopping = (not DTYPE_TAG.upper().startswith("BF")) # Deactivate early stopping for bf16
 
     # ------------------------------------------------------------------
     # Grid search over population size and perturbation fraction
@@ -349,7 +349,8 @@ if __name__ == "__main__":
                 q=q,
                 max_calls=MAX_CALLS,
                 budget_calls=c,
-                pop_size=pop_size
+                pop_size=pop_size,
+                weighted_sampling=WEIGHTED
             )
 
             start_t = time.time()
@@ -371,6 +372,9 @@ if __name__ == "__main__":
                   f"best_err={abs(best_err):.4e} ({100*err_pct:.2f}%) | "
                   f"ulp_calls={best_calls:>6} | "
                   f"n calls = {ga.ulp_calls[-1]} ({100*(ga.ulp_calls[-1]/c):.2f}% of call budget)  in {elapsed:.2f}s")
+            
+            ga.release()
+            del ga
 
         run_errs      = np.array(run_errs)
         run_err_ratio = np.array(run_err_ratio)

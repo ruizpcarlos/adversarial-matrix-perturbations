@@ -57,7 +57,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
         obj_delta = np.zeros(n_samples)
         idx       = self._sample_entries(self.n_perturbed)
-        n_calls, err    = self.compute_max_err(idx)
+        n_calls, err    = self.compute_max_err(indices=idx)
 
         if verbose:
             pbar = tqdm(range(n_samples)) 
@@ -68,7 +68,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         for i in pbar:
             idx  = self.generate_new_sol(idx)
 
-            _n_c, _err   = self.compute_max_err(idx)
+            _n_c, _err   = self.compute_max_err(indices=idx)
             delta_err    = err-_err
             delta_calls  = n_calls - _n_c
             obj_delta[i] = delta_err - tie_penalty * delta_calls
@@ -105,7 +105,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         L       = L0
 
         iter_idx             = self._sample_entries(self.n_perturbed)
-        iter_calls, iter_err = self.compute_max_err(iter_idx)
+        iter_calls, iter_err = self.compute_max_err(indices=iter_idx)
 
         # chains       = [L]
         temps        = [T]
@@ -134,7 +134,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                     break
                 
                 idx = self.generate_new_sol(iter_idx)
-                n_calls, _err = self.compute_max_err(idx)
+                n_calls, _err = self.compute_max_err(indices=idx)
 
                 delta_err   = _err - iter_err
                 delta_calls = n_calls - iter_calls
@@ -277,9 +277,7 @@ if __name__ == "__main__":
 
         for trial in range(n_test):
             # X_test     = X[trial]
-            # target_err = targets[trial]
-
-            target_err = targets[(trial, q)]
+            target_err = targets[trial]
 
             print(f"{trial+1} - Full matrix perturbation = {target_err:.4e}")
 
