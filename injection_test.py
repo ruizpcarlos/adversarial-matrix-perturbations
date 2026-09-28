@@ -182,36 +182,59 @@ if __name__=="__main__":
     inputs     = [x.unsqueeze(0) for x in X_sub]
 
     fname   = os.path.join(INJ_DIR, f"non_perturbed_{RUN_TAG}.pt")
-    y_clean = run_ablation(inputs, resnet18, ['cpu', 'cuda'], out_path=fname)
+
+    if os.path.exists(fname):
+        print("Reading ablation results from cache")
+        y_clean = torch.load(fname)
+    else:
+        print("Running ablation test for non-perturbed images")
+        y_clean = run_ablation(inputs, resnet18, ['cpu', 'cuda'], out_path=fname)
 
     adv_fname  = os.path.join(INJ_DIR, f"adv_inputs_{SEED}")
     adv_inputs = {}
     iter_aux   = list(zip(idx, inputs))
 
-    for i, x in tqdm(iter_aux, desc="Generating adversarial perturbations"):
+    from_cache = os.path.exists(adv_fname + ".pt")
 
-        ga = AdversarialGeneticAlgorithm(
-                        input_matrix = x,
-                        func         = resnet18,
-                        q            = perturb_frac,
-                        max_calls         = max_calls,
-                        budget_calls      = budget,
-                        weighted_sampling = True,
-                        pop_size          = 50
-                    )
-        # start   = time.time()
-        ga.search(early_stopping=True)
-        # elapsed = time.time() - start
+    if from_cache:
+        "Loading adversarial inputs from cache"
+        adv_inputs = torch.load(adv_fname + ".pt")
+        adv_inputs_list = [x.unsqueeze(0) for x in adv_inputs]
+    else:
 
-        # print(f"Elapsed time = {elapsed:.2f}s")
-        # print(f"max err = {ga.history[-1][1]:.4e}"
-        #     f"({100*(ga.history[-1][1]/target):.2f}% of baseline)")
+        for i, x in tqdm(iter_aux, desc="Generating adversarial perturbations"):
 
-        X_adv = ga.compute_adv_input()
-        adv_inputs.update({i: X_adv})
-        adv_inputs_list = list(adv_inputs.values())
+            ga = AdversarialGeneticAlgorithm(
+                            input_matrix = x,
+                            func         = resnet18,
+                            q            = perturb_frac,
+                            max_calls         = max_calls,
+                            budget_calls      = budget,
+                            weighted_sampling = True,
+                            pop_size          = 50
+                        )
+            # start   = time.time()
+            ga.search(early_stopping=True)
+            # elapsed = time.time() - start
 
-        ga.release()
+            # print(f"Elapsed time = {elapsed:.2f}s")
+            # print(f"max err = {ga.history[-1][1]:.4e}"
+            #     f"({100*(ga.history[-1][1]/target):.2f}% of baseline)")
 
-        save_dict_to_pickle(adv_inputs, adv_fname +".pkl")
-        torch.save(torch.stack(adv_inputs_list), adv_fname + ".pt")
+            X_adv = ga.compute_adv_input()
+            adv_inputs.update({i: X_adv})
+            adv_inputs_list = list(adv_inputs.values())
+
+            ga.release()
+
+            save_dict_to_pickle(adv_inputs, adv_fname +".pkl")
+            torch.save(torch.stack(adv_inputs_list), adv_fname + ".pt")
+
+    fname   = os.path.join(INJ_DIR, f"perturbed_{RUN_TAG}.pt")
+    
+    if os.path.exists(fname):
+        print("Reading ablation results from cache")
+        y_clean = torch.load(fname)
+    else:
+        print("Running ablation test for adversarial inputs")
+        y_clean = run_ablation(adv_inputs_list, resnet18, ['cpu', 'cuda'], out_path=fname)
