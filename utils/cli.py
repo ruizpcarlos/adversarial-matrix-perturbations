@@ -18,7 +18,11 @@ def parse_args():
         parser.error("n_samples must be >= 1")
     return args
 
-def add_common_args(parser, *, dtype=False, weighted=False, matmul=False):
+def add_common_args(parser, *, 
+                    dtype=False, 
+                    weighted=False, 
+                    matmul=False,
+                    include_seed=False):
     parser.add_argument("n_samples", type=int, help="Number of samples to run.")
     if dtype:
         parser.add_argument("dtype", type=str.lower,
@@ -32,6 +36,11 @@ def add_common_args(parser, *, dtype=False, weighted=False, matmul=False):
                             default=True,
                             help="Optimize using matrix multiplication (False uses a complete model)"
                                 "Default: off.")
+    if include_seed:
+        parser.add_argument("--seed", 
+                            type=int,
+                            default=161,
+                            help="integer used for random seeding (default: %(default)s)",)
     return parser
 
 # Use like:

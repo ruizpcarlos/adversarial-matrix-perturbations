@@ -391,5 +391,23 @@ def generation_plot(pop_scores, best_scores, n, full_err):
     plt.show()
 
 #####################################
-#      Grid Search
+#      PRINT IMAGES 
 ####################################
+import torch
+# ImageNet normalization stats used by weights.transforms()
+mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
+def show_image(img_tensor, ax=None):
+    img = img_tensor * std + mean          # undo normalization
+    img = img.clamp(0, 1)                  # guard against float rounding
+    img = img.permute(1, 2, 0).numpy()     # CHW -> HWC for matplotlib
+
+    if ax is None:
+        plt.imshow(img)
+        plt.axis("off")
+        plt.show()
+    else:
+        ax.imshow(img)
+        ax.axis("off")
+
