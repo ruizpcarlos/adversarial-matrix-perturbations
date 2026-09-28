@@ -90,7 +90,7 @@ def get_images_and_labels(dataset, N_sample, generator):
 
 def sample_inputs(X: torch.Tensor, n_sample: int, generator):
     idx = torch.randperm(X.shape[0], generator=generator)[:n_sample]
-    return X[idx], idx
+    return X[idx], idx.tolist()
 
 
 @torch.inference_mode()
@@ -136,7 +136,7 @@ def run_ablation(inputs, model, platforms, out_path="ablation_errors.pt"):
     model_inject = copy.deepcopy(model).eval().to(inject_device)
 
     all_errors = []
-    for x in tqdm(inputs, desc="inputs"):
+    for x in tqdm(inputs, desc="Inputs"):
         all_errors.append(
             successive_layer_injection(x, model_record, model_inject, record_device, inject_device)
         )
@@ -218,13 +218,8 @@ if __name__=="__main__":
                             weighted_sampling = True,
                             pop_size          = 50
                         )
-            # start   = time.time()
             ga.search(early_stopping=True)
-            # elapsed = time.time() - start
-
-            # print(f"Elapsed time = {elapsed:.2f}s")
-            # print(f"max err = {ga.history[-1][1]:.4e}"
-            #     f"({100*(ga.history[-1][1]/target):.2f}% of baseline)")
+           
 
             X_adv = ga.compute_adv_input()
             adv_inputs.update({i: X_adv})
