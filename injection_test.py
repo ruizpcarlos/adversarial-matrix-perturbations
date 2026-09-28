@@ -5,6 +5,7 @@ import urllib.request
 import tarfile
 import os
 import argparse
+import pickle
 
 import torch
 import numpy as np
@@ -191,19 +192,23 @@ if __name__=="__main__":
         y_clean = run_ablation(inputs, resnet18, ['cpu', 'cuda'], out_path=fname)
 
     adv_fname  = os.path.join(INJ_DIR, f"adv_inputs_{SEED}")
+    adv_pkl = adv_fname + ".pkl"
+    # from_cache = os.path.exists(adv_fname + ".pkl")
+
     adv_inputs = {}
+    if os.path.exists(adv_pkl):
+        try:
+            with open(adv_pkl, "rb") as f:
+                adv_inputs = pickle.load(f)
+            print(f"Loaded {len(adv_inputs)} cached adversarial inputs")
+        except (EOFError, pickle.UnpicklingError):
+            print("Cache corrupted, starting fresh")
+
     iter_aux   = list(zip(idx, inputs))
-
-    from_cache = os.path.exists(adv_fname + ".pt")
-
-    if from_cache:
-        "Loading adversarial inputs from cache"
-        adv_inputs = torch.load(adv_fname + ".pt")
-        adv_inputs_list = [x.unsqueeze(0) for x in adv_inputs]
-    else:
-
-        for i, x in tqdm(iter_aux, desc="Generating adversarial perturbations"):
-
+    todo = [(i, x) for i, x in iter_aux if i not in adv_inputs]
+    
+    if todo:
+        for i, x in tqdm(todo, desc="Generating adversarial perturbations"):    
             ga = AdversarialGeneticAlgorithm(
                             input_matrix = x,
                             func         = resnet18,
@@ -227,14 +232,13 @@ if __name__=="__main__":
 
             ga.release()
 
-            save_dict_to_pickle(adv_inputs, adv_fname +".pkl")
+            save_dict_to_pickle(adv_inputs, adv_pkl)
             torch.save(torch.stack(adv_inputs_list), adv_fname + ".pt")
-
-    fname   = os.path.join(INJ_DIR, f"perturbed_{RUN_TAG}.pt")
     
+    fname   = os.path.join(INJ_DIR, f"perturbed_{RUN_TAG}.pt")
     if os.path.exists(fname):
         print("Reading ablation results from cache")
-        y_clean = torch.load(fname)
+        y_adv = torch.load(fname)
     else:
         print("Running ablation test for adversarial inputs")
-        y_clean = run_ablation(adv_inputs_list, resnet18, ['cpu', 'cuda'], out_path=fname)
+        y_adv = run_ablation(adv_inputs_list, resnet18, ['cpu', 'cuda'], out_path=fname)
