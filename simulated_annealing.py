@@ -230,10 +230,15 @@ if __name__ == "__main__":
     model, W = load_model_and_weights(model_name, dtype)                
     n_latent = W.shape[0]
 
-    X     = torch.randn(n_test, n_latent, n_latent,
-                            dtype=dtype)
-    X_img = torch.randn(n_test, 1, 3, 224, 224,
-                            dtype=dtype)
+   
+    if MATMUL:
+        X    = torch.randn(n_test, n_latent, n_latent,
+                                dtype=dtype)
+        func = W
+    else:
+        X    = torch.randn(n_test, 1, 3, 224, 224,
+                               dtype=dtype)
+        func = model
 
     MAX_CALLS      = 32 # if data.upper().startswith("BF") else 128
     c              = 1000  # total budget of calls to compute_max_err
@@ -250,12 +255,12 @@ if __name__ == "__main__":
     targets      = []
     sa_instances = {}
 
-    print(f"Computing target errors of the sample ({dtype})")
+    print(f"Computing initial Temperature of the sample ({dtype})")
     for j, _x in enumerate(tqdm(X)):
         for q in q_values:
             targ_aux = SimulatedAnnealingSearch(
                                             input_matrix=_x, 
-                                            func=W,
+                                            func=func,
                                             q=q,
                                             max_calls=MAX_CALLS,
                                             budget_calls=c)
@@ -279,16 +284,9 @@ if __name__ == "__main__":
             # X_test     = X[trial]
             target_err = targets[trial]
 
-            print(f"{trial+1} - Full matrix perturbation = {target_err:.4e}")
+            print(f"{trial+1} - Non-perturbed matrix err = {target_err:.4e}")
 
             adv_sa = sa_instances[(trial, q)]
-
-            # adv_sa = SimulatedAnnealingSearch(
-            #                             input_matrix=X_test, 
-            #                             func=W,
-            #                             c=c,
-            #                             q=q,
-            #                             max_calls=MAX_CALLS)
 
             start_t = time.time()
             Y, sol, _, _ =  adv_sa.search(L0=5,

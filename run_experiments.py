@@ -44,10 +44,14 @@ torch.manual_seed(SEED)
 model, W = load_model_and_weights(model_name, dtype=dtype)
 
 n_latent = W.shape[0]
-n_input  = n_latent
 
-func     = W if MATMUL else model
-func_gpu = func.to('cuda') if MATMUL else copy.deepcopy(func).eval().to("cuda")
+if MATMUL:
+    func     = W
+    func_gpu = func.to('cuda')
+else:
+    func     = model
+    func_gpu = copy.deepcopy(func).eval().to("cuda")
+
 
 MAX_CALLS = 32
 C = 1_000
@@ -126,8 +130,13 @@ def record(algorithm_name:str,
 # Main sampling loop
 # ----------------------------------------------------------------------
 for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
-
-    X = torch.randn(n_input, n_latent, dtype=dtype)
+    
+    if MATMUL:
+        X = torch.randn(n_latent, n_latent,
+                        dtype=dtype)
+    else:
+        X = torch.randn(1, 3, 224, 224,
+                        dtype=dtype)
 
     # ---------------- RANDOM (benchmark) ----------------
     algorithm_name = "RANDOM"

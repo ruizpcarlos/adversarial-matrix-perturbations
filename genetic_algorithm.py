@@ -298,10 +298,14 @@ if __name__ == "__main__":
     model, W = load_model_and_weights(model_name, dtype)
     n_latent = W.shape[0]
 
-    X     = torch.randn(n_test, n_latent, n_latent,
-                        dtype=dtype)
-    X_img = torch.randn(n_test, 1, 3, 224, 224,
-                        dtype=dtype)
+    if MATMUL:
+        X    = torch.randn(n_test, n_latent, n_latent,
+                            dtype=dtype)
+        func = W
+    else:
+        X    = torch.randn(n_test, 1, 3, 224, 224,
+                           dtype=dtype)
+        func = model
 
     MAX_CALLS = 32 
     c         = 1000  # total budget of calls to compute_max_err
@@ -316,7 +320,7 @@ if __name__ == "__main__":
     targets = []
     print(f"Computing target errors of the sample ({dtype})")
     for _x in X:
-        targ_aux = AdvPerturbation(_x, W, 
+        targ_aux = AdvPerturbation(_x, func=func, 
                                    q=0.01, # Not used in this instance, but required for init
                                    max_calls=MAX_CALLS, 
                                    budget_calls=c)
@@ -345,7 +349,7 @@ if __name__ == "__main__":
 
             ga = AdversarialGeneticAlgorithm(
                 input_matrix=X_test,
-                func=W,
+                func=func,
                 q=q,
                 max_calls=MAX_CALLS,
                 budget_calls=c,
