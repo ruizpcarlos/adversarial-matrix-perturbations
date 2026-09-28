@@ -1,4 +1,5 @@
-import sys
+import argparse
+import os
 import time
 import itertools
 
@@ -11,7 +12,7 @@ from tqdm import tqdm
 
 from adv_matrix import AdvPerturbation, FuncType
 from utils.utils import save_dict_to_pickle, load_model_and_weights
-
+from utils.cli import add_common_args, DTYPES
 
 class SimulatedAnnealingSearch(AdvPerturbation):
 
@@ -56,7 +57,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
         obj_delta = np.zeros(n_samples)
         idx       = self._sample_entries(self.n_perturbed)
-        n_calls, err    = self.compute_max_err(idx)
+        n_calls, err    = self.compute_max_err(indices=idx)
 
         if verbose:
             pbar = tqdm(range(n_samples)) 
@@ -67,7 +68,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         for i in pbar:
             idx  = self.generate_new_sol(idx)
 
-            _n_c, _err   = self.compute_max_err(idx)
+            _n_c, _err   = self.compute_max_err(indices=idx)
             delta_err    = err-_err
             delta_calls  = n_calls - _n_c
             obj_delta[i] = delta_err - tie_penalty * delta_calls
@@ -104,7 +105,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
         L       = L0
 
         iter_idx             = self._sample_entries(self.n_perturbed)
-        iter_calls, iter_err = self.compute_max_err(iter_idx)
+        iter_calls, iter_err = self.compute_max_err(indices=iter_idx)
 
         # chains       = [L]
         temps        = [T]
@@ -133,7 +134,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                     break
                 
                 idx = self.generate_new_sol(iter_idx)
-                n_calls, _err = self.compute_max_err(idx)
+                n_calls, _err = self.compute_max_err(indices=idx)
 
                 delta_err   = _err - iter_err
                 delta_calls = n_calls - iter_calls
@@ -196,33 +197,48 @@ class SimulatedAnnealingSearch(AdvPerturbation):
 
 if __name__ == "__main__":
 
-    n_test = int(sys.argv[1])   # number of repeated runs per (pop_size, p) configuration
-    data   = sys.argv[2]
+    # ----------------------------------------------------------------------
+    # CLI args
+    # ----------------------------------------------------------------------
+    parser = argparse.ArgumentParser()
+    add_common_args(parser, dtype=True, weighted=True, matmul=True)
+    args = parser.parse_args()
 
+    SEED       = 420
     model_name = "ResNet"
-    seed       = 420
-    dtype      = torch.bfloat16 if data.upper().startswith("BF") else torch.float32
 
-    random.seed(seed)
-    torch.manual_seed(seed)
+    n_test   = args.n_samples
+    dtype    = DTYPES[args.dtype]
+    WEIGHTED = args.weighted
+    MATMUL   = args.matmul
+
+    # Tag used in output names so weighted / unweighted / fp32 / bf16 runs never overwrite each other
+    DTYPE_TAG = "bf16" if dtype == torch.bfloat16 else "fp32"
+    RUN_TAG   = f"{model_name}" + ("_W" if MATMUL else "")  + f"_{DTYPE_TAG}_{SEED}" + ("_weighted" if WEIGHTED else "")
+
+    random.seed(SEED)
+    torch.manual_seed(SEED)
+
+    
+    DRIVE_DIR  = "/content/drive/MyDrive/exp_results/gridsearch"
+    fname      = f"simAnneal_gridsearch_{RUN_TAG}.pkl"
+    drive_path = os.path.join(DRIVE_DIR, fname)
 
     # ------------------------------------------------------------------
     # EXPERIMENT INPUTS
     # ------------------------------------------------------------------
-    # if model_name.upper().startswith("EFF"):
-    #     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1).eval()
-    #     W     = torch.transpose(model.classifier[1].weight.data, 0, 1).to(dtype)
-    # else:
-    #     model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1).eval()
-    #     W     = torch.transpose(model.fc.weight.data, 0, 1).to(dtype)
-
     model, W = load_model_and_weights(model_name, dtype)                
     n_latent = W.shape[0]
 
-    X     = torch.randn(n_test, n_latent, n_latent,
-                            dtype=dtype)
-    X_img = torch.randn(n_test, 1, 3, 224, 224,
-                            dtype=dtype)
+   
+    if MATMUL:
+        X    = torch.randn(n_test, n_latent, n_latent,
+                                dtype=dtype)
+        func = W
+    else:
+        X    = torch.randn(n_test, 1, 3, 224, 224,
+                               dtype=dtype)
+        func = model
 
     MAX_CALLS      = 32 # if data.upper().startswith("BF") else 128
     c              = 1000  # total budget of calls to compute_max_err
@@ -235,24 +251,22 @@ if __name__ == "__main__":
     params   = list(zip(alphas, betas))
     q_values = [0.05, 0.1]
 
-    results = []
-    fname   = f"sa_gridsearch_{model_name}_{data}_{seed}.pkl"
-
+    results      = []
     targets      = []
     sa_instances = {}
 
-    print(f"Computing target errors of the sample ({dtype})")
+    print(f"Computing initial Temperature of the sample ({dtype})")
     for j, _x in enumerate(tqdm(X)):
         for q in q_values:
             targ_aux = SimulatedAnnealingSearch(
                                             input_matrix=_x, 
-                                            func=W,
+                                            func=func,
                                             q=q,
                                             max_calls=MAX_CALLS,
                                             budget_calls=c)
             targ_aux.init_temp(verbose=False)
             sa_instances.update({(j, q) : targ_aux})
-        err = targ_aux.full_perturbation_err
+        err = targ_aux.baseline_err
         targets.append(err)
 
     for ab, q in itertools.product(params, q_values):
@@ -268,20 +282,11 @@ if __name__ == "__main__":
 
         for trial in range(n_test):
             # X_test     = X[trial]
-            # target_err = targets[trial]
+            target_err = targets[trial]
 
-            target_err = targets[(trial, q)]
-
-            print(f"{trial+1} - Full matrix perturbation = {target_err:.4e}")
+            print(f"{trial+1} - Non-perturbed matrix err = {target_err:.4e}")
 
             adv_sa = sa_instances[(trial, q)]
-
-            # adv_sa = SimulatedAnnealingSearch(
-            #                             input_matrix=X_test, 
-            #                             func=W,
-            #                             c=c,
-            #                             q=q,
-            #                             max_calls=MAX_CALLS)
 
             start_t = time.time()
             Y, sol, _, _ =  adv_sa.search(L0=5,
@@ -328,6 +333,7 @@ if __name__ == "__main__":
             })
 
         save_dict_to_pickle(results, filename=fname)
+        save_dict_to_pickle(results, filename=drive_path) 
 
         print(f"  -> mean err% ={run_err_ratio.mean():.4e} (std={run_errs.std():.4e}) "
                 f"{(100*success_pct):.2f}% success over {n_test} trials\n")

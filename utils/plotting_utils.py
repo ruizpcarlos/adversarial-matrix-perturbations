@@ -93,9 +93,7 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
         delta_bf16 = delta_bf16.unsqueeze(0)
         COLORS = ["black"]
 
-    assert delta_f32.shape[2] == delta_bf16.shape[2], \
-        "fp32 and bf16 deltas must have the same number of ULP calls"
-    PLOT_X   = range(delta_f32.shape[2])
+    plot_x   = range(delta_f32.shape[2])
     iter_aux = range(delta_f32.shape[0])
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
@@ -105,9 +103,9 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
         y = delta_f32[k, :]
         c = COLORS[k % len(COLORS)]
 
-        ax1.plot(PLOT_X, y[0, :], c=c)  # Max-norm
+        ax1.plot(plot_x, y[0, :], c=c)  # Max-norm
         # target = ax1_2n if log_scale else ax1
-        ax1.plot(PLOT_X, y[1, :], c=c, linestyle="--")  # 2-norm
+        ax1.plot(plot_x, y[1, :], c=c, linestyle="--")  # 2-norm
 
     ax1.set_xlabel(X_LABEL)
     ax1.set_title("Single Precision (fp32)")
@@ -117,12 +115,14 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
     ax1.grid(True, which="both", alpha=0.3)
 
     # RIGHT SUBPLOT: HALF PRECISION
+    plot_x   = range(delta_bf16.shape[2])
+        
     for k in iter_aux:
         y = delta_bf16[k, :]
         c = COLORS[k % len(COLORS)]
 
-        ax2.plot(PLOT_X, y[0, :], c=c)  # Max-norm
-        ax2.plot(PLOT_X, y[1, :], c=c, linestyle="--")  # 2-norm
+        ax2.plot(plot_x, y[0, :], c=c)  # Max-norm
+        ax2.plot(plot_x, y[1, :], c=c, linestyle="--")  # 2-norm
 
     ax2.set_xlabel(X_LABEL)
     ax2.set_title("Half Precision (bfloat16)")
@@ -228,7 +228,7 @@ def iter_error_distributions(Ys, fname=None):
         df = Y[0]
         y_dist = Y[1]
 
-        fp  = "Half" if row==0 else "Single"
+        # fp  = "Half" if row==0 else "Single"
         fp2 = "bf16" if row==0 else "fp32"
 
         sns.stripplot(data=df, x="n_calls", y="error", ax=ax1)
@@ -250,7 +250,7 @@ def iter_error_distributions(Ys, fname=None):
 
 def plot_error_histograms(y_dist, func_names, dtypes, fname=None):
 
-        # assert len(functions)==len(func_names), "Check that the length of names and the functions match"
+        assert len(y_dist)==len(dtypes), "Verify that there are results for each data type"
 
         n_rows = len(func_names)
         
@@ -262,7 +262,7 @@ def plot_error_histograms(y_dist, func_names, dtypes, fname=None):
 
             for j, dtype in enumerate(dtypes):
 
-                Y_np  = y_dist[k, j, :].numpy().ravel()
+                Y_np  = y_dist[j][k, :].numpy().ravel()
                 ax = axs[k, j]
 
                 if k == 0:
@@ -298,13 +298,11 @@ def plot_cum_stats(Y, fname=None):
     labels     = ['max', 'q99', 'q75', 'median']
     linestyles = ['-', '--', '-.', ':']
     color      = 'black'
-
-    x = range(Y[0].shape[1])
-
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    fig, axes  = plt.subplots(1, 2, figsize=(15, 5))
 
     for i, ax in enumerate(axes):
         y_stats = Y[i]
+        x = range(y_stats.shape[1])
 
         fp2 = "bf16" if i==1 else "fp32"
 
@@ -327,7 +325,7 @@ def plot_cum_stats(Y, fname=None):
     plt.show()
 
 
-def q_error_distributions(Ys, Xmax, fname=None):
+def q_error_distributions(Ys, X_baseline, fname=None):
     """
     Ys: list of dictionaries of numpy arrays for plotting
     """
@@ -348,7 +346,7 @@ def q_error_distributions(Ys, Xmax, fname=None):
 
         df = Y[0]
         y_dist = Y[1]
-        max_err = Xmax[row]
+        baseline = X_baseline[row]
 
         fp = "fp32" if row==1 else "bf16"
 
@@ -356,9 +354,9 @@ def q_error_distributions(Ys, Xmax, fname=None):
         ax1.set_title(f"Max Error Distributions ({fp})")
         ax1.set_ylabel("Max Error")
         ax1.set_xlabel("% of perturbed indices (q)")
-        ax1.axhline(y=max_err,
+        ax1.axhline(y=baseline,
                     c = "tab:grey", linestyle=":",
-                    # label = "Max err for full matrix perturbation"
+                    label = "Non-perturbed matrix error"
                     )
         ax1.legend()
 
@@ -366,11 +364,10 @@ def q_error_distributions(Ys, Xmax, fname=None):
         bins = max(0, min(26, n_values))
 
         fp  = "Half" if row==0 else "Single"
-        fp2 = "bf16" if row==0 else "fp32"
 
         ax2.set_title(f"Max Error distribution \n {n_values} unique values")
         ax2.hist(y_dist, bins=bins, orientation="horizontal")
-        ax2.axhline(y=max_err, c = "tab:grey", linestyle=":")
+        ax2.axhline(y=baseline, c = "tab:grey", linestyle=":")
 
     if fname is not None:
         fig.savefig(fname, bbox_inches="tight")
