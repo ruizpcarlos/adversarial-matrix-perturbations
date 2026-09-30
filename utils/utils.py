@@ -233,7 +233,9 @@ def paired_compare_to_benchmark(data_dict, benchmark_key="RANDOM", alternative="
             out[name] = {"stat": np.nan, "p_value": 1.0, "median_diff": 0.0}
             continue
 
-        stat, pv = wilcoxon(v, benchmark, alternative=alternative)
+        stat, pv = wilcoxon(diff, 
+                            alternative=alternative, 
+                            zero_method = "zsplit") # Accounts for common ties in bf16 case
         out[name] = {
             "stat": stat,
             "p_value": pv,
