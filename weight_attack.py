@@ -2,7 +2,7 @@
 import copy
 import random
 import pickle
-import time
+import gc
 
 import torch
 import numpy as np
@@ -22,32 +22,29 @@ from utils.utils import vector_distance, wrap_score
 class AdvLayerPerturbation:
 
     def __init__(self,
-                 dataset,
+                 # dataset,
                  model: nn.Module,
                  model_name: str,
                  q:float,
-                 model_gpu: Optional[nn.Module] = None,
+                 # model_gpu: Optional[nn.Module] = None,
                  max_calls:int = 32,
                  budget_calls: int = 1_000,
                  objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
                  seed: int = 420,
                  weighted_sampling: bool = False,
-                 mutation_rate:float = 0.1,
+                 mutation_rate:float = 0.01,
                  batch_size:int = 256):
 
-        self.dataset     = dataset
+        # self.dataset     = dataset
 
-        self.model = model
-        fe, clf    = self.split_model(model_name) # SEPARATE MODEL INTO FEATURE EXTRACTION AND CLASSIFIER
+        fe, clf    = self.split_model(model, model_name) # SEPARATE MODEL INTO FEATURE EXTRACTION AND CLASSIFIER
         lin        = clf[1] if isinstance(clf, nn.Sequential) else clf   # EfficientNet vs ResNet
 
-        self.extractor = fe.eval()
+        self._extractor = fe.eval()
         self.W_cpu     = lin.weight.detach().clone()
         self.b_cpu     = lin.bias.detach().clone()
         self.W_gpu     = self.W_cpu.to("cuda")
         self.b_gpu     = self.b_cpu.to("cuda")
-
-        del self.model
 
         if not 0 < q < 1:
             raise ValueError(f"q must be in [0, 1], got {q}")
@@ -56,10 +53,10 @@ class AdvLayerPerturbation:
 
         self.INFTY = torch.tensor(torch.inf)
 
-        self.n_data     = self.dataset.shape[0]
-        self.n_features = self.W_cpu.shape[0]
-        self.n_classes  = self.W_cpu.shape[1]
-        self.total      = int(self.W_cpu.numel())
+        self.n_classes, self.n_features = self.W_cpu.shape
+
+        # self.n_data = self.dataset.shape[0]
+        self.total  = int(self.W_cpu.numel())
 
         self.objective_fn = (
                         objective_fn if objective_fn is not None
@@ -70,8 +67,8 @@ class AdvLayerPerturbation:
         self.max_calls   = max_calls
         self.total_calls = self.budget_calls*max_calls
 
-        # torch.manual_seed(seed)
-        self.rng = np.random.default_rng(seed)
+        self.rng       = np.random.default_rng(seed)
+        self.batch_rng = np.random.default_rng(seed + 1) 
 
         self.weighted_sampling = weighted_sampling
         self.sample_weights    = None
@@ -83,8 +80,8 @@ class AdvLayerPerturbation:
         self.mutation_rate = mutation_rate
 
 
-    def split_model(self, name: str):
-        model = self.model
+    def split_model(self, model:nn.Module, name: str):
+        
         if name.upper().startswith("EFF"):
             fe = nn.Sequential(model.features, model.avgpool, nn.Flatten(1))
             clf = model.classifier
@@ -95,14 +92,24 @@ class AdvLayerPerturbation:
 
 
     @torch.inference_mode()
-    def extract_features(self, batch_size=256, device="cuda"):
-        self.extractor.to(device)
-        feats = [self.extractor(self.dataset[i:i+batch_size].to(device)).cpu()
-                for i in range(0, len(self.dataset), batch_size)]
-        self.features = torch.cat(feats)        # N x 512 (or 1280), computed once
-        self.extractor.cpu()
+    def extract_features(self, dataset, batch_size=256, device="cuda"):
+        self._extractor.to(device)
+        feats = [self._extractor(dataset[i:i+batch_size].to(device)).cpu()
+                for i in range(0, len(dataset), batch_size)]
+        self.features = torch.cat(feats)
+        self.n_data = self.features.shape[0]               # replaces dataset.shape[0]
+        self._extractor = None                             # drop the backbone
+        self._flush()
         return self.features
 
+
+    @staticmethod
+    def _flush():
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        
     ############################################################
     #        CANDIDATE DRAWING
     ###########################################################
@@ -148,9 +155,11 @@ class AdvLayerPerturbation:
     #######################################################
     @torch.inference_mode()
     def set_batch(self, ):
-        """Call once per generation: fixes the image batch (common random numbers)."""
-        img_idx = torch.randperm(self.n_data)[:self.batch_size]
+        assert self.features is not None, "No features have been extracted"
 
+        """Call once per generation: fixes the image batch (common random numbers)."""
+        img_idx = torch.from_numpy(self.batch_rng.permutation(self.n_data)[:self.batch_size])
+    
         self.h_cpu = self.features[img_idx]
         self.h_gpu = self.h_cpu.to("cuda")
         y_c = F.linear(self.h_cpu, self.W_cpu, self.b_cpu)
