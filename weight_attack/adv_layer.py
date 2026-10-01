@@ -13,20 +13,18 @@ from datasets import load_dataset
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Union, Optional, Tuple, Callable
+from typing import Optional, Callable
 
-from functools import cached_property, update_wrapper
+# from functools import cached_property, update_wrapper
 from utils.utils import vector_distance, wrap_score
 
 
 class AdvLayerPerturbation:
 
     def __init__(self,
-                 # dataset,
                  model: nn.Module,
                  model_name: str,
                  q:float,
-                 # model_gpu: Optional[nn.Module] = None,
                  max_calls:int = 32,
                  budget_calls: int = 1_000,
                  objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
@@ -45,6 +43,8 @@ class AdvLayerPerturbation:
         self.b_cpu     = lin.bias.detach().clone()
         self.W_gpu     = self.W_cpu.to("cuda")
         self.b_gpu     = self.b_cpu.to("cuda")
+
+        self.features = None
 
         if not 0 < q < 1:
             raise ValueError(f"q must be in [0, 1], got {q}")
@@ -78,6 +78,12 @@ class AdvLayerPerturbation:
 
         self.batch_size = batch_size
         self.mutation_rate = mutation_rate
+        self.pools    = None
+
+        # Batch snapshots (h_cpu, h_gpu, e0): A = search, B = fitness, C = held-out test
+        self.features_val = None
+        self.batch_A = self.batch_B = self.batch_C = None
+        self.n_evals = 0          # number of fitness() calls (budget unit for every algorithm)
 
 
     def split_model(self, model:nn.Module, name: str):
@@ -92,15 +98,33 @@ class AdvLayerPerturbation:
 
 
     @torch.inference_mode()
-    def extract_features(self, dataset, batch_size=256, device="cuda"):
+    def _extract(self, source, batch_size, device):
+        if torch.is_tensor(source):
+            batches = (source[i:i + batch_size] for i in range(0, len(source), batch_size))
+        else:  # DataLoader yielding (x, y) or x
+            batches = (b[0] if isinstance(b, (list, tuple)) else b for b in source)
+        return torch.cat([self._extractor(x.to(device)).cpu() for x in batches])
+
+
+    def extract_features(self, train, val=None, batch_size=256, device="cuda"):
         self._extractor.to(device)
-        feats = [self._extractor(dataset[i:i+batch_size].to(device)).cpu()
-                for i in range(0, len(dataset), batch_size)]
-        self.features = torch.cat(feats)
-        self.n_data = self.features.shape[0]               # replaces dataset.shape[0]
-        self._extractor = None                             # drop the backbone
+        self.features = self._extract(train, batch_size, device)
+        self.n_data   = self.features.shape[0]
+        if val is not None:
+            self.features_val = self._extract(val, batch_size, device)
+            self.n_val        = self.features_val.shape[0]
+        self._extractor = None          # drop the backbone only after both splits are done
         self._flush()
-        return self.features
+        return self.features, self.features_val
+
+    def set_features(self, train, val=None):
+        """
+        Helper to set features if they have been precomputed and read from cache.
+        """
+        self.features, self.features_val = train, val
+        self.n_data = train.shape[0]
+        self.n_val = None if val is None else val.shape[0]
+        self._extractor = None
 
 
     @staticmethod
@@ -153,19 +177,121 @@ class AdvLayerPerturbation:
     #######################################################
     #       CANDIDATE SCORING
     #######################################################
-    @torch.inference_mode()
-    def set_batch(self, ):
+    def split_pools(self, fracs=(0.5, 0.5)):
+        """Partition the TRAIN features into disjoint pools A (search) and B (fitness)."""
         assert self.features is not None, "No features have been extracted"
+        assert len(fracs) == 2 and abs(sum(fracs) - 1) < 1e-9, "fracs must have 2 entries summing to 1"
 
-        """Call once per generation: fixes the image batch (common random numbers)."""
-        img_idx = torch.from_numpy(self.batch_rng.permutation(self.n_data)[:self.batch_size])
-    
-        self.h_cpu = self.features[img_idx]
+        perm = self.batch_rng.permutation(self.n_data)
+        n_a  = int(fracs[0] * self.n_data)
+        self.pools = {"A": perm[:n_a], "B": perm[n_a:]}
+        assert not (set(self.pools["A"].tolist()) & set(self.pools["B"].tolist()))
+
+
+    @torch.inference_mode()
+    def set_batch(self, pool, batch_size=None):
+        """
+        pool: "A" | "B" -> drawn from disjoint partitions of the train features
+            "C"       -> drawn from the validation features
+        Returns the (h_cpu, h_gpu, e0) snapshot and loads it into self.
+        """
+        if pool == "C":
+            assert self.features_val is not None, "No validation features: pass val= to extract_features"
+            src, candidates = self.features_val, np.arange(self.n_val)
+        elif pool in ("A", "B"):
+            assert self.features is not None, "No features have been extracted"
+            if self.pools is None:
+                self.split_pools()
+            src, candidates = self.features, self.pools[pool]
+        else:
+            raise ValueError(f"unknown pool {pool!r}")
+
+        bs  = min(self.batch_size if batch_size is None else batch_size, candidates.size)
+        sel = self.batch_rng.choice(candidates, size=bs, replace=False)
+        self.batch_idx = sel
+
+        self.h_cpu = src[torch.from_numpy(sel)]
         self.h_gpu = self.h_cpu.to("cuda")
         y_c = F.linear(self.h_cpu, self.W_cpu, self.b_cpu)
         y_g = F.linear(self.h_gpu, self.W_gpu, self.b_gpu).cpu()
-        self.e0 = (y_c - y_g).abs().amax(dim=1)           # (N,) baseline per-image error
+        self.e0 = (y_c - y_g).abs().amax(dim=1)
+        return (self.h_cpu, self.h_gpu, self.e0)
 
+
+    ############################################################
+    #   BATCH HANDLING (shared by every search algorithm)
+    ############################################################
+    # A batch is a snapshot (h_cpu, h_gpu, e0). e0 is batch-specific, so a score is
+    # only meaningful on the batch it was computed with.
+    #   A: search batch  (feeds evaluate -> best_calls)
+    #   B: fitness batch (scores the candidate after best_calls ULPs)
+    #   C: held-out test batch (never used for decisions)
+    def load_batch(self, batch):
+        self.h_cpu, self.h_gpu, self.e0 = batch
+
+    def resample(self):
+        """Draw a fresh (A, B) pair from the disjoint train pools."""
+        self.batch_A = self.set_batch("A")
+        self.batch_B = self.set_batch("B")
+
+    def draw_test_batch(self, batch_size=None):
+        """Draw the fixed held-out batch C (call once; resample() does not touch it)."""
+        self.batch_C = self.set_batch("C", batch_size)
+        return self.batch_C
+
+    @torch.inference_mode()
+    def apply_ulps(self, idx, n_ulp):
+        """Perturbed CPU copy of W with n_ulp nextafter steps applied at idx."""
+        W    = self.W_cpu.clone()
+        flat = W.view(-1)
+        i    = torch.from_numpy(np.asarray(idx, dtype=np.int64))
+        v    = flat[i]
+        for _ in range(n_ulp):
+            v = torch.nextafter(v, self.INFTY)
+        flat[i] = v
+        return W
+
+    @torch.inference_mode()
+    def score_fixed(self, idx, n_ulp, agg=None):
+        """Apply exactly n_ulp nextafter steps to idx; score on the currently loaded batch."""
+        agg = agg or self.default_agg
+        W_c = self.apply_ulps(idx, n_ulp)
+        W_g = W_c.to("cuda")
+        y_g = F.linear(self.h_gpu, W_g, self.b_gpu)
+        y_c = F.linear(self.h_cpu, W_c, self.b_cpu)
+        e   = (y_c - y_g.cpu()).abs().amax(dim=1)
+        return agg(e, self.e0)
+
+    def fitness(self, idx, agg=None):
+        """
+        1. evaluate() on batch A -> best_calls
+        2. apply best_calls ULP steps
+        3. score on batch B      -> fitness
+        Returns (fitness, best_calls, score_A). Counts one eval toward the budget.
+        """
+        if self.batch_A is None or self.batch_B is None:
+            self.resample()
+        self.load_batch(self.batch_A)
+        n_ulp, score_A = self.evaluate(idx, agg)
+        self.load_batch(self.batch_B)
+        fit = self.score_fixed(idx, n_ulp, agg)
+        self.n_evals += 1
+        return fit, n_ulp, score_A
+
+    @torch.inference_mode()
+    def test_score(self, idx, n_ulp, batch_size=None, fresh=False, agg=None):
+        """
+        Score on held-out data. Default: the fixed batch C (drawn on first use).
+        fresh=True draws a new, unstored C batch (e.g. a larger one for a final estimate).
+        """
+        if fresh:
+            batch = self.set_batch("C", batch_size)
+        else:
+            if self.batch_C is None:
+                self.draw_test_batch(batch_size)
+            batch = self.batch_C
+        self.load_batch(batch)
+        return self.score_fixed(idx, n_ulp, agg)
 
     @staticmethod
     def default_agg(e, e0):
