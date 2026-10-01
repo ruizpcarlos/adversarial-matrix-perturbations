@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 
-from adv_layer import AdvLayerPerturbation
+from .adv_layer import AdvLayerPerturbation
 
 
 class SimulatedAnnealingLayerSearch(AdvLayerPerturbation):
