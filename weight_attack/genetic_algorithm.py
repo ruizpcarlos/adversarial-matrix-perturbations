@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from adv_layer import AdvLayerPerturbation
+from .adv_layer import AdvLayerPerturbation
 
 
 class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
@@ -41,8 +41,9 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
 
         self.population   = []
         self.fitness_hist = []   # per generation: [(best_calls, fitness), ...]
-        self.history      = []     # [(best_calls, best_fitness), ...] one per generation
-        self.ulp_calls    = [0]    # cumulative n_evals after each generation
+        self.history      = []   # [(best_calls, best_fitness), ...] one per generation
+        self.ulp_calls    = []   # cumulative n_evals after each generation
+        self.best_C       = []
 
         self.solution = None
 
@@ -80,6 +81,9 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
         free the *previous* generation's full population/fitness arrays."""
         best_calls, best_fit = self.fitness_hist[-1][0]
         self.history.append((best_calls, best_fit))
+
+        test = self.test_score(self.population[-1][0], best_calls)
+        self.best_C.append(test)
 
         if not self.keep_full_history and len(self.population) > 1:
             self.population[-2]   = None
@@ -189,9 +193,14 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
 
         return self.solution
 
-    def track_max(self):
+    def track_max(self, score:str):
+        assert score in["train", "val"], "Scored set name must be 'train' or 'val'"
 
-        max_fit = [0] + [fit for _, fit in self.history]
+        if score=='train':
+            max_fit = [0] + [fit for _, fit in self.history]
+        else:
+            max_fit = [0] + [fit for fit in self.best_C]
+
         idx_aux = self.ulp_calls
         y_max   = torch.zeros(self.ulp_calls[-1])
 
