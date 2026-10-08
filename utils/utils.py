@@ -14,14 +14,29 @@ import torch.nn.functional as F
 from torch.linalg import multi_dot
 import torchvision.models as models
 
-from utils.objective_func import vector_distance
+from functools import update_wrapper
 
+from utils.objective_func import vector_distance
 
 
 _FORMATS = {
     torch.float32:  (torch.int32, 23, 8),
     torch.bfloat16: (torch.int16,  7, 8),
 }
+
+
+class CallTracker:
+    def __init__(self, func):
+        update_wrapper(self, func)
+        self.func = func
+        self.call_count = 0
+
+    def __call__(self, *args, **kwargs):
+        self.call_count += 1
+        return self.func(*args, **kwargs)
+
+    def reset(self):
+        self.call_count = 0
 
 
 def print_sys_specs():
