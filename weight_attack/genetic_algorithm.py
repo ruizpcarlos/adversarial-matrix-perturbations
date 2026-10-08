@@ -1,7 +1,7 @@
 import gc
 import time
 import itertools
-from typing import Optional
+from typing import Optional, Callable
 
 import numpy as np
 import torch
@@ -144,7 +144,9 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
         self.sort_generation()
         self._record_generation()
 
-    def search(self, early_stopping=True, verbose=False, agg=None):
+    def search(self,
+               agg_stat: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None, 
+               early_stopping=True, verbose=False):
 
         self.n_evals   = 0
         self.ulp_calls = [0]
@@ -153,7 +155,7 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
         self.fitness_hist.clear()
 
         start_t = time.time()
-        self.init_population(agg)
+        self.init_population(agg_stat)
         total_t = time.time() - start_t
 
         if verbose:
@@ -171,7 +173,7 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
                and counter < self.stop_counter):
 
             start_t = time.time()
-            self.evolve_generation(agg)
+            self.evolve_generation(agg_stat)
             total_t = time.time() - start_t
 
             n_calls, fit = self.fitness_hist[-1][0]
@@ -212,19 +214,19 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
     ##################################################################
     #                  VALIDATION / OUTPUT
     ##################################################################
-    def validate(self, top_k=1, batch_size=None, agg=None):
-        """Re-score the top_k individuals of the last generation on the held-out batch C."""
-        return [
-            dict(calls=fit[0],
-                 fitness_B=fit[1],
-                 fitness_C=self.test_score(genome, fit[0], batch_size=batch_size, agg=agg))
-            for genome, fit in zip(self.population[-1][:top_k], self.fitness_hist[-1][:top_k])
-        ]
+    # def validate(self, top_k=1, batch_size=None, agg=None):
+    #     """Re-score the top_k individuals of the last generation on the held-out batch C."""
+    #     return [
+    #         dict(calls=fit[0],
+    #              fitness_B=fit[1],
+    #              fitness_C=self.test_score(genome, fit[0], batch_size=batch_size, agg=agg))
+    #         for genome, fit in zip(self.population[-1][:top_k], self.fitness_hist[-1][:top_k])
+    #     ]
 
-    def final_score(self, batch_size=1024):
-        """Estimate on a fresh, larger batch that never influenced the search."""
-        genome, n_ulp = self.solution
-        return self.test_score(genome, n_ulp, batch_size=batch_size, fresh=True)
+    # def final_score(self, batch_size=1024):
+    #     """Estimate on a fresh, larger batch that never influenced the search."""
+    #     genome, n_ulp = self.solution
+    #     return self.test_score(genome, n_ulp, batch_size=batch_size, fresh=True)
 
     def compute_adv_weights(self):
         genome, n_calls = self.solution

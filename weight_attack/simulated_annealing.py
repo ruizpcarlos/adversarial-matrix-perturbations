@@ -1,4 +1,7 @@
+from typing import Optional, Callable
+
 import numpy as np
+import torch
 from tqdm import tqdm
 
 from .adv_layer import AdvLayerPerturbation
@@ -25,18 +28,18 @@ class SimulatedAnnealingLayerSearch(AdvLayerPerturbation):
     # def neighbor(self, idx):
     #     return self.mutate_geneset(idx)                    # uses self.mutation_rate
 
-    def init_temp(self, target_prob=0.9, n_samples=50, verbose=False):
+    def init_temp(self, target_prob=0.9, n_samples=150, agg=None, verbose=False):
         if verbose:
             print(f"Sampling {n_samples} moves to set initial temp")
         if self.batch_A is None:
             self.resample()
         cur = self.random_geneset()
-        cur_fit, _, _ = self.fitness(cur)
+        cur_fit, _, _ = self.fitness(cur, agg)
         deltas = []
 
         for _ in tqdm(range(n_samples), desc="Sampling moves", disable=not verbose):
             cand = self.mutate_geneset(cur)
-            fit, _, _ = self.fitness(cand)
+            fit, _, _ = self.fitness(cand, agg)
             deltas.append(fit - cur_fit)
             cur, cur_fit = cand, fit                       # random walk
         worse = np.array([d for d in deltas if d < 0])
@@ -44,27 +47,29 @@ class SimulatedAnnealingLayerSearch(AdvLayerPerturbation):
         self.n_evals = 0                                   # calibration is not charged
 
     def search(self, L0=5, alpha=0.85, beta=1.03,
-               T_min=1e-8,
+               T_min=1e-10,
                patience=25,
+               agg_stat: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
                resample_every=None,
                test_batch_size=1024,
                verbose=False):
-
+        
+        self.n_evals=0
         self.resample()
         self.draw_test_batch(test_batch_size)              # fixed, never used for decisions
         if self.T0 is None:
-            self.init_temp(verbose=verbose)
+            self.init_temp(verbose=verbose, agg = agg_stat)
         T = self.T0
-        self.n_evals = 0
+        # self.n_evals = 0
 
         cur = self.random_geneset()
-        cur_fit, cur_n, _ = self.fitness(cur)
+        cur_fit, cur_n, _ = self.fitness(cur, agg_stat)
         best_idx, best_n, best_fit = cur, cur_n, cur_fit
 
         log = {k: [] for k in ("T", "evals", "cur_B", "best_B", "best_C")}
 
         def record():
-            test = self.test_score(best_idx, best_n)
+            test = self.test_score(best_idx, best_n, agg=agg_stat)
             for k, v in zip(log, (T, self.n_evals, cur_fit, best_fit, test)):
                 log[k].append(v)
 
@@ -76,15 +81,15 @@ class SimulatedAnnealingLayerSearch(AdvLayerPerturbation):
             # so after a resample, re-anchor cur and best.
             if resample_every and k > 0 and k % resample_every == 0:
                 self.resample()
-                cur_fit, cur_n, _ = self.fitness(cur)
-                best_fit, best_n, _ = self.fitness(best_idx)  # evaluate re-runs: best_n may change
+                cur_fit, cur_n, _   = self.fitness(cur, agg_stat)
+                best_fit, best_n, _ = self.fitness(best_idx, agg_stat)  # evaluate re-runs: best_n may change
 
             improved = False
             for _ in range(L):
                 if self.n_evals >= self.budget_calls:
                     break
                 cand = self.mutate_geneset(cur)
-                fit, n_ulp, _ = self.fitness(cand)
+                fit, n_ulp, _ = self.fitness(cand, agg_stat)
                 d = fit - cur_fit
                 if d >= 0 or self.rng.random() < np.exp(d / T):
                     cur, cur_fit, cur_n = cand, fit, n_ulp
@@ -104,11 +109,6 @@ class SimulatedAnnealingLayerSearch(AdvLayerPerturbation):
         self.solution = (best_idx, best_n)
         self.log = log
         return best_fit, self.solution
-
-    def final_score(self, batch_size=1024):
-        """Estimate on a fresh, larger batch that never influenced the search."""
-        idx, n_ulp = self.solution
-        return self.test_score(idx, n_ulp, batch_size=batch_size, fresh=True)
 
     def compute_adv_weights(self):
         idx, n_ulp = self.solution

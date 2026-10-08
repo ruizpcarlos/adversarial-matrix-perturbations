@@ -1,4 +1,3 @@
-# %%
 import copy
 import random
 import pickle
@@ -15,8 +14,9 @@ import torch.nn.functional as F
 
 from typing import Optional, Callable
 
-# from functools import cached_property, update_wrapper
-from utils.utils import vector_distance, wrap_score
+from functools import partial #, cached_property, update_wrapper
+from utils.utils import wrap_score
+from utils.objective_func import vector_distance, net_success_pct, cvar_low, mean_log_ratio
 
 
 class AdvLayerPerturbation:
@@ -55,13 +55,14 @@ class AdvLayerPerturbation:
 
         self.n_classes, self.n_features = self.W_cpu.shape
 
-        # self.n_data = self.dataset.shape[0]
         self.total  = int(self.W_cpu.numel())
 
         self.objective_fn = (
-                        objective_fn if objective_fn is not None
-                        else vector_distance
-                        )
+                    objective_fn if objective_fn is not None
+                    else partial(vector_distance, batch=True)
+                    )
+        
+        self.default_agg = net_success_pct
 
         self.budget_calls = budget_calls # Controls the number of calls to compute_max_err
         self.max_calls   = max_calls
@@ -76,9 +77,9 @@ class AdvLayerPerturbation:
         if weighted_sampling:
             self._build_sampling_weights(eps = 0.75)
 
-        self.batch_size = batch_size
+        self.batch_size    = batch_size
         self.mutation_rate = mutation_rate
-        self.pools    = None
+        self.pools         = None
 
         # Batch snapshots (h_cpu, h_gpu, e0): A = search, B = fitness, C = held-out test
         self.features_val = None
@@ -133,33 +134,25 @@ class AdvLayerPerturbation:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+
+    # def _begin(self):
+    #     assert self.features is not None, "Call extract_features() / set_features() first"
+    #     assert self.features_val is not None, "Validation features are required (pool C)"
+    #     # self._reset_state()
+    #     # self._resample()
+    #     self.batch_C = self._draw_batch("C", self.test_batch_size)   # fixed for the whole run
+    
+
+    def _update_best(self, idx, n_ulp, fit):
+        if fit > self.best_fit:
+            self.best_idx, self.best_n, self.best_fit = idx, n_ulp, fit
+            return True
+        return False
+
         
     ############################################################
     #        CANDIDATE DRAWING
     ###########################################################
-
-    # def _build_sampling_weights(self, alpha: float=0.1, eps:float= 0.1) -> torch.Tensor:
-    #     score = wrap_score(self.W_cpu.reshape(-1),
-    #                     alpha=alpha,
-    #                        max_calls=self.max_calls).double()
-    #     n, total = score.numel(), score.sum()
-    #     uniform = torch.full_like(score, 1.0 / n)
-    #     if total <= 0:                       # nothing can wrap: fall back to uniform
-    #         return uniform
-    #     # Mixture: with prob (1-eps) follow the score, with prob eps sample uniformly
-    #     return (1 - eps) * score / total + eps * uniform
-
-    # def _draw_flat(self, num_samples: int, weighted=None):
-    #     weighted = self.weighted_sampling if weighted is None else weighted
-    #     if not weighted or self.sample_weights is None:
-    #         return torch.randperm(self.total)[:num_samples]
-    #     return torch.multinomial(self.sample_weights, num_samples, replacement=False)
-
-
-    # def _sample_entries(self, num_samples=1, weighted=None):
-    #     flat_idx = self._draw_flat(num_samples, weighted)
-    #     return (flat_idx // self.n_classes, flat_idx % self.n_classes)
-
     def _build_sampling_weights(self, alpha=0.1, eps=0.1):
         score = wrap_score(self.W_cpu.reshape(-1),
                            alpha=alpha,
@@ -173,6 +166,7 @@ class AdvLayerPerturbation:
         cdf = np.cumsum(w.numpy())
         cdf /= cdf[-1]                                       # guard against rounding drift
         self._cdf = cdf                                      # built once, reused by every draw
+
 
     #######################################################
     #       CANDIDATE SCORING
@@ -214,7 +208,8 @@ class AdvLayerPerturbation:
         self.h_gpu = self.h_cpu.to("cuda")
         y_c = F.linear(self.h_cpu, self.W_cpu, self.b_cpu)
         y_g = F.linear(self.h_gpu, self.W_gpu, self.b_gpu).cpu()
-        self.e0 = (y_c - y_g).abs().amax(dim=1)
+        self.e0 = self.objective_fn(y_c, y_g)
+
         return (self.h_cpu, self.h_gpu, self.e0)
 
 
@@ -229,15 +224,18 @@ class AdvLayerPerturbation:
     def load_batch(self, batch):
         self.h_cpu, self.h_gpu, self.e0 = batch
 
+
     def resample(self):
         """Draw a fresh (A, B) pair from the disjoint train pools."""
         self.batch_A = self.set_batch("A")
         self.batch_B = self.set_batch("B")
 
+
     def draw_test_batch(self, batch_size=None):
         """Draw the fixed held-out batch C (call once; resample() does not touch it)."""
         self.batch_C = self.set_batch("C", batch_size)
         return self.batch_C
+
 
     @torch.inference_mode()
     def apply_ulps(self, idx, n_ulp):
@@ -251,6 +249,7 @@ class AdvLayerPerturbation:
         flat[i] = v
         return W
 
+
     @torch.inference_mode()
     def score_fixed(self, idx, n_ulp, agg=None):
         """Apply exactly n_ulp nextafter steps to idx; score on the currently loaded batch."""
@@ -259,8 +258,9 @@ class AdvLayerPerturbation:
         W_g = W_c.to("cuda")
         y_g = F.linear(self.h_gpu, W_g, self.b_gpu)
         y_c = F.linear(self.h_cpu, W_c, self.b_cpu)
-        e   = (y_c - y_g.cpu()).abs().amax(dim=1)
+        e   = self.objective_fn(y_c, y_g.cpu())
         return agg(e, self.e0)
+
 
     def fitness(self, idx, agg=None):
         """
@@ -273,10 +273,12 @@ class AdvLayerPerturbation:
             self.resample()
         self.load_batch(self.batch_A)
         n_ulp, score_A = self.evaluate(idx, agg)
+        self.n_evals += 1
         self.load_batch(self.batch_B)
         fit = self.score_fixed(idx, n_ulp, agg)
-        self.n_evals += 1
+        # self.n_evals += 1
         return fit, n_ulp, score_A
+
 
     @torch.inference_mode()
     def test_score(self, idx, n_ulp, batch_size=None, fresh=False, agg=None):
@@ -293,12 +295,32 @@ class AdvLayerPerturbation:
         self.load_batch(batch)
         return self.score_fixed(idx, n_ulp, agg)
 
-    @staticmethod
-    def default_agg(e, e0):
-        frac = (e > e0).float().mean()
-        gain = ((e - e0).mean() / (e0.mean() + 1e-30))
-        return frac.item() + 1e-3 * gain.item()
 
+    # @staticmethod
+    # def default_agg(e, e0):
+    #     frac = (e > e0).float().mean() - (e < e0).float().mean() # Works because both means have the same denominator
+    #     gain = ((e - e0).mean() / (e0.mean() + 1e-30))
+
+    #     return frac.item() + 1e-3 * gain.item()
+    
+    # @staticmethod
+    # def cvar_low(e, e0, alpha:float=0.1):
+    #     """
+    #     Calculates the mean of the bottom alpha(default=10%) differences 
+    #     """
+    #     diff = e-e0
+    #     k = max(1, math.ceil(alpha * diff.shape[1]))
+    #     low_quantiles = torch.topk(diff, k, dim=1, largest=False).values
+
+    #     return low_quantiles.mean(dim=1).item()
+
+    # @staticmethod
+    # def mean_log_ratio(e, e0, eps:float=1e-15):
+
+    #     log_ratio = torch.log(e.clamp_min(eps)) - torch.log(e0.clamp_min(eps))
+
+    #     return log_ratio.mean().item()
+    
 
     @torch.inference_mode()
     def evaluate(self, idx, agg=None):
@@ -319,7 +341,7 @@ class AdvLayerPerturbation:
 
             y_g = F.linear(self.h_gpu, W_g, self.b_gpu)    # launches asynchronously
             y_c = F.linear(self.h_cpu, W_c, self.b_cpu)    # overlaps with the GPU work
-            e   = (y_c - y_g.cpu()).abs().amax(dim=1)      # (N,), syncs here
+            e   = self.objective_fn(y_c, y_g.cpu())        # (N,), syncs here
 
             score = agg(e, self.e0)
             if score > best_score:
@@ -328,6 +350,64 @@ class AdvLayerPerturbation:
         return best_calls, best_score
 
 
+    def random_search(self,  weighted:bool, 
+                      resample_every:int = 0, 
+                      test_batch_size:int=1024,
+                      verbose:bool=False,
+                      agg_stat: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None):
+        self.n_evals=0
+        self.resample()
+        self.draw_test_batch(test_batch_size)              # fixed, never used for decisions
+
+        idx = self.random_geneset(weighted=weighted)
+        fit, n_ulp, _ = self.fitness(idx, agg_stat)
+        best_idx = idx
+        best_fit = fit
+        best_n   = n_ulp
+
+        k = 1
+        log = {metric: [] for metric in ("evals", "cur_B", "best_B", "best_C")}
+        
+        def record():
+            test = self.test_score(best_idx, best_n, agg=agg_stat)
+            for metric, v in zip(log, (self.n_evals, fit, best_fit, test)):
+                log[metric].append(v)
+        
+        record()
+            
+        while self.n_evals < self.budget_calls:
+
+            if resample_every and k > 0 and k % resample_every == 0:
+                self.resample()
+
+                aux_fit, aux_n, _ = self.fitness(self.best_idx, agg_stat)
+                best_fit, best_n  = aux_fit, aux_n
+
+            idx = self.random_geneset(weighted=weighted)
+            fit, n_ulp, _ = self.fitness(idx, agg_stat)
+
+            if fit > best_fit:
+                best_idx = idx
+                best_n   = n_ulp
+                best_fit = fit
+
+            k += 1
+            if verbose and k % 100 == 0:
+                print(f"k={k} best={best_fit:.4f} n_ulp={best_n} evals={self.n_evals}")
+
+            record()
+
+        self.solution = (best_idx, best_n)
+        self.log=log
+        return best_fit, self.solution
+
+
+    def final_score(self, agg, batch_size=1024):
+        """Estimate on a fresh, larger batch that never influenced the search."""
+        idx, n_ulp = self.solution
+        return self.test_score(idx, n_ulp, agg=agg, batch_size=batch_size, fresh=True)
+
+    
     ##################################################################
     #                 MUTATION FUNCTIONS
     ##################################################################
