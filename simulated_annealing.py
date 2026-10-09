@@ -24,29 +24,36 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                  max_calls:int = 32,
                  budget_calls:int=1_000,
                  objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+                 seed:Optional[int] = None,
                  weighted_sampling: bool = False):
 
-        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls, objective_fn, weighted_sampling)
+        super().__init__(input_matrix=input_matrix, func=func, 
+                         q=q, 
+                         func_gpu=func_gpu, 
+                         max_calls=max_calls, budget_calls=budget_calls, 
+                         objective_fn=objective_fn, 
+                         weighted_sampling=weighted_sampling, 
+                         seed=seed)
 
         self.T0 = None
 
 
-    def random_geneset(self):
-        """Random genome via rejection sampling — better when total >> k."""
-        chosen = set()
-        while len(chosen) < self.n_perturbed:
-            chosen.add(random.randrange(self.total))
-        return np.array(sorted(chosen), dtype=np.int64)
+    # def random_geneset(self):
+    #     """Random genome via rejection sampling — better when total >> k."""
+    #     chosen = set()
+    #     while len(chosen) < self.n_perturbed:
+    #         chosen.add(random.randrange(self.total))
+    #     return np.array(sorted(chosen), dtype=np.int64)
 
 
-    def generate_new_sol(self, index):
+    # def generate_new_sol(self, index):
 
-        x_str = self.indices_to_geneset(*index)
-        # x1 = self.recombine(x_str)
-        x1, _ = self.recombine(x_str, self.random_geneset())
-        x1 = self.mutate_geneset(x1)
+    #     x_str = self.indices_to_geneset(*index)
+    #     # x1 = self.recombine(x_str)
+    #     x1, _ = self.recombine(x_str, self.random_geneset())
+    #     x1 = self.mutate_geneset(x1)
 
-        return self.geneset_to_indices(x1)
+    #     return self.geneset_to_indices(x1)
 
 
     def init_temp(self, target_prob=0.9, n_samples=100, tie_penalty=1e-8, verbose=False):
@@ -66,7 +73,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
             pbar = range(n_samples)
 
         for i in pbar:
-            idx  = self.generate_new_sol(idx)
+            idx  = self.mutate_geneset(idx)
 
             _n_c, _err   = self.compute_max_err(indices=idx)
             delta_err    = err-_err
@@ -133,7 +140,7 @@ class SimulatedAnnealingSearch(AdvPerturbation):
                     budget_exhausted = True
                     break
                 
-                idx = self.generate_new_sol(iter_idx)
+                idx = self.mutate_geneset(iter_idx)
                 n_calls, _err = self.compute_max_err(indices=idx)
 
                 delta_err   = _err - iter_err
