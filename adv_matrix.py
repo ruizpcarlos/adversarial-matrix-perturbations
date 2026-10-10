@@ -169,7 +169,9 @@ class AdvPerturbation:
 
         self.rng  = np.random.default_rng(seed)
         self._cdf = None
-        self._w = None
+        self._w   = None
+
+        self.weighted_sampling = weighted_sampling
         if weighted_sampling:
             self._build_sampling_weights()
         

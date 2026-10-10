@@ -203,7 +203,7 @@ for sample_idx in tqdm(range(n_samples), desc="Sampling matrices"):
                                        early_stopping=True)
         elapsed = time.time() - start_t
 
-        max_err = y[-1].item()
+        max_err = y.amax().item()
         budget  = sim_anneal.ulp_calls[-1]
 
         record(algorithm_name, sample_idx, elapsed, target_err,
