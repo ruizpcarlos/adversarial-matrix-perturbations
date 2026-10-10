@@ -169,11 +169,9 @@ class AdvPerturbation:
 
         self.rng  = np.random.default_rng(seed)
         self._cdf = None
-        self.weighted_sampling = weighted_sampling
-        self.sample_weights    = (
-                                self._build_sampling_weights()
-                                if weighted_sampling else None
-                            )
+        self._w = None
+        if weighted_sampling:
+            self._build_sampling_weights()
         
 
         # Wrap the function to count calls
@@ -191,12 +189,12 @@ class AdvPerturbation:
         return err
         
     
-    def flat_to_3d(self, idx):
-        aux_idx = idx % (self.n_latent**2)
-        c = idx // (self.n_latent**2)
-        h = aux_idx // self.n_latent
-        w = aux_idx % self.n_latent
-        return c, h, w
+    # def flat_to_3d(self, idx):
+    #     aux_idx = idx % (self.n_latent**2)
+    #     c = idx // (self.n_latent**2)
+    #     h = aux_idx // self.n_latent
+    #     w = aux_idx % self.n_latent
+    #     return c, h, w
 
     # def _build_sample_weights(self, alpha: float=0.1, eps:float= 0.1) -> torch.Tensor:
     #     score = wrap_score(self.input_matrix.reshape(-1),
@@ -210,18 +208,16 @@ class AdvPerturbation:
     #     return (1 - eps) * score / total + eps * uniform
 
     def _build_sampling_weights(self, alpha=0.1, eps=0.1):
-            score = wrap_score(self.input_matrix.reshape(-1),
-                               alpha=alpha,
-                               max_calls=self.max_calls).double()
-            n, score_sum = score.numel(), score.sum()
-            if score_sum <= 0:
-                w = torch.full_like(score, 1.0 / n)
-            else:
-                w = (1 - eps) * score / score_sum + eps / n         # mixture with uniform
-            self.sample_weights = w
-            cdf = np.cumsum(w.numpy())
-            cdf /= cdf[-1]                                       # guard against rounding drift
-            self._cdf = cdf                                      # built once, reused by every draw
+        score = wrap_score(self.input_matrix.reshape(-1), alpha=alpha,
+                        max_calls=self.max_calls).double()
+        n, score_sum = score.numel(), score.sum()
+        w = (torch.full_like(score, 1.0 / n) if score_sum <= 0
+            else (1 - eps) * score / score_sum + eps / n)
+        self.sample_weights = w
+        self._w   = w.numpy().copy()          # pristine copy, never mutated
+        cdf = np.cumsum(self._w)
+        cdf /= cdf[-1]
+        self._cdf = cdf
 
 
     # def _draw_flat(self, num_samples: int, weighted=None):
@@ -231,20 +227,21 @@ class AdvPerturbation:
     #     return torch.multinomial(self.sample_weights, num_samples, replacement=False)
 
 
-    def _draw_distinct(self, n, exclude=None, weighted=None):
+    def _draw_distinct(self, n, exclude=None, weighted=None, cdf=None):
         """n distinct flat indices, none in `exclude` (sorted array). Returns sorted int64.
         Drawing with replacement and keeping first occurrences is exactly successive
         sampling without replacement, so the weighted case matches the old multinomial."""
         
         weighted = self.weighted_sampling if weighted is None else weighted
-        use_w    = weighted and self._cdf is not None
+        cdf      = self._cdf if cdf is None else cdf
+        use_w    = weighted and cdf is not None
         out      = np.empty(0, dtype=np.int64)
         
         while out.size < n:
             need = n - out.size
             m    = int(need * 1.25) + 8
             if use_w:
-                cand = np.searchsorted(self._cdf, self.rng.random(m), side="right")
+                cand = np.searchsorted(cdf, self.rng.random(m), side="right")
                 np.clip(cand, 0, self.total - 1, out=cand)
             else:
                 cand = self.rng.integers(0, self.total, size=m)
@@ -269,8 +266,8 @@ class AdvPerturbation:
     #     else:
     #         return (flat_idx // self.n_latent, flat_idx % self.n_latent)
     
-    def _sample_entries(self, num_samples=1, weighted=None):
-        return self._draw_distinct(num_samples, weighted=weighted)   # flat indices only
+    def _sample_entries(self, num_samples=1, weighted=None, cdf=None):
+        return self._draw_distinct(num_samples, weighted=weighted, cdf=cdf)
 
     def _product_err(self, mat_cpu, mat_gpu):
         err = product_err(mat_cpu, mat_gpu, self.objective_fn)
@@ -294,11 +291,15 @@ class AdvPerturbation:
 
         if weighted and not self.weighted_sampling:
             raise ValueError(f"Passed weighted={weighted}  but there are no weights available for sampling")
+
+        cdf = self._cdf if weighted else None
+        w   = self._w.copy() if weighted else None
         
         _nextafter.reset()
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
+        X_flat = X_.view(-1)
 
         if self.tensor_prod:
             mat_cpu = [None] + self.weights
@@ -312,28 +313,33 @@ class AdvPerturbation:
         maxed   = set()
         max_err = -1
         stale   = 0      
-        n_done  = n_iter 
+        n_done  = n_iter
+        exhausted = False
 
         iterator = tqdm(range(n_iter)) if verbose else range(n_iter)
 
         for i in iterator:
 
-            idx = self._sample_entries(weighted=weighted)
-            key = tuple(int(i) for i in idx)
-            while key in maxed:
-                idx = self._sample_entries(weighted=weighted)
-                key = tuple(int(i) for i in idx)
+            idx = self._sample_entries(weighted=weighted, cdf=cdf)
+            key = (int(idx[0]),)
+            if not weighted and len(maxed) >= self.total:   # unweighted guard
+                n_done = i
+                break
 
-            counts[key] = counts.get(key, 0) + 1
+            counts[key] = counts.get(key, 0) + step
             if counts[key] >= self.max_calls:
                 maxed.add(key)
+                if weighted:
+                    w[idx[0]] = 0.0
+                    if w.sum() <= 0:
+                        exhausted = True                     # nothing left to sample
+                    else:
+                        cdf = np.cumsum(w)
+                        cdf /= cdf[-1]
 
-            if step > 1:
-                for _ in range(step):
-                    X_[idx] = _nextafter(X_[idx], self.INFTY)
-            else:
-                X_[idx] = _nextafter(X_[idx], self.INFTY)
-
+            for _ in range(step):
+                X_flat[idx] = _nextafter(X_flat[idx], self.INFTY)
+            
             X_gpu.copy_(X_, non_blocking=True)
 
             if self.tensor_prod:
@@ -351,6 +357,10 @@ class AdvPerturbation:
                 stale    = 0
             else:
                 stale += 1
+
+            if exhausted:
+                n_done = i + 1
+                break
 
             # NEW: early stopping
             if early_stopping and stale >= n_stopping:
@@ -414,11 +424,11 @@ class AdvPerturbation:
         X_adv        = self.input_matrix.clone()
         idx, n_calls = self.solution
 
-        flat = X_adv.view(-1)                       # shares storage with X_adv
+        X_flat = X_adv.view(-1)                       # shares storage with X_adv
         idx  = torch.as_tensor(idx, dtype=torch.long)
 
         for _ in range(n_calls):
-            flat[idx] = torch.nextafter(flat[idx], self.INFTY)
+            X_flat[idx] = torch.nextafter(X_flat[idx], self.INFTY)
 
         self.X_adv = X_adv
         return X_adv
