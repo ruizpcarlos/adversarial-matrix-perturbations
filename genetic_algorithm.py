@@ -29,17 +29,25 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
                 budget_calls:int = 1_000,
                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
                 weighted_sampling: bool = False,
+                seed:Optional[int] = None,
                 pop_size:int = 50, 
                 mating_pct:float = 0.4,
                 keep_full_history:bool = False):
 
-        super().__init__(input_matrix, func, q, func_gpu, max_calls, budget_calls, objective_fn, weighted_sampling)
+        super().__init__(input_matrix=input_matrix, func=func, 
+                         q=q, 
+                         func_gpu=func_gpu, 
+                         max_calls=max_calls, budget_calls=budget_calls, 
+                         objective_fn=objective_fn,
+                         weighted_sampling=weighted_sampling, 
+                         seed=seed)
 
         self.n_generations = n_generations = max(1, budget_calls// pop_size)
         self.stop_counter  = max(10, 1+n_generations//2)
         self.pop_size      = pop_size
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct*pop_size)
+       
 
         self.keep_full_history = keep_full_history
 
@@ -57,7 +65,8 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
 
     def init_population(self):
 
-        first_gen = [self._sample_entries(self.n_perturbed) for _ in range(self.pop_size)]
+        # first_gen = [self._sample_entries(self.n_perturbed) for _ in range(self.pop_size)]
+        first_gen = [self.random_geneset() for _ in range(self.pop_size)]
         # gen_error = [self.compute_max_err(idx) for idx in first_gen]
         with ThreadPoolExecutor(max_workers=8) as ex:
             gen_error = list(ex.map(self._compute_max_err_threadsafe, first_gen))
@@ -105,18 +114,21 @@ class AdversarialGeneticAlgorithm(AdvPerturbation):
         self.population[gen] = list(current_gen)
         self.fitness[gen]    = list(gen_fitness)
 
-
     def create_offspring(self, parent1, parent2):
+        return self.recombine(parent1, parent2,
+                                  mutation_rate=self.mutation_rate)
+    
+    # def create_offspring(self, parent1, parent2):
 
-        bx = self.indices_to_geneset(*parent1)
-        by = self.indices_to_geneset(*parent2)
+    #     bx = self.indices_to_geneset(*parent1)
+    #     by = self.indices_to_geneset(*parent2)
 
-        xy1, xy2 = self.recombine(bx, by)
+    #     xy1, xy2 = self.recombine(bx, by)
 
-        xy1 = self.geneset_to_indices(xy1)
-        xy2 = self.geneset_to_indices(xy2)
+    #     xy1 = self.geneset_to_indices(xy1)
+    #     xy2 = self.geneset_to_indices(xy2)
 
-        return xy1, xy2
+    #     return xy1, xy2
 
     # def mating_probabilities(self):
 

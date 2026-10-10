@@ -83,7 +83,7 @@ class DeltaNormPlots:
         DEFAULT_FNAME = "perturbation_norm"
 
         if qs_list is None:
-            fname = DEFAULT_FNAME + ".png"
+            fname = DEFAULT_FNAME + ".pdf"
             delta_f32, delta_bf16 = self.perturbation_norm(n_calls=n_calls, 
                                                            n_calls_bf16=n_calls_bf16)
         else:
@@ -99,7 +99,7 @@ class DeltaNormPlots:
                 delta_f32[i, :]   = aux_f32
                 delta_bf16[i, :]  = aux_bf16
 
-            fname = DEFAULT_FNAME + "_q.png"
+            fname = DEFAULT_FNAME + "_q.pdf"
 
         fname = os.path.join(PLOT_DIR, fname)
         delta_growth_plots(delta_f32, delta_bf16, 
@@ -302,7 +302,7 @@ class ErrorPlots:
 
     def plot_distributions(self, y_dist):
 
-        fname = os.path.join(PLOT_DIR, "dtype_model_err.png")
+        fname = os.path.join(PLOT_DIR, "dtype_model_err.pdf")
 
         plot_error_histograms(y_dist,  self.func_names, self.DTYPES, fname=fname)
 
@@ -314,7 +314,7 @@ class ErrorPlots:
         err_f32  = y_hist[0][idx]
         err_bf16 = y_hist[1][idx]
         
-        fname = os.path.join(PLOT_DIR, f"error_signals_{funcname}.png")
+        fname = os.path.join(PLOT_DIR, f"error_signals_{funcname}.pdf")
         
         iter_error((err_bf16, err_f32),
                         show_zero=show_zero,
@@ -342,11 +342,11 @@ class ErrorPlots:
             bf16_data = tensor_to_plotting_inputs(err_bf16)
             fp32_data = tensor_to_plotting_inputs(err_fp32)
 
-            fname1 = os.path.join(PLOT_DIR, f"acc_distributions_{name}.png")
+            fname1 = os.path.join(PLOT_DIR, f"acc_distributions_{name}.pdf")
             iter_error_distributions((bf16_data, fp32_data),
                                         fname=fname1)
             
-            fname2 = os.path.join(PLOT_DIR, f"cum_stats_{name}.png")
+            fname2 = os.path.join(PLOT_DIR, f"cum_stats_{name}.pdf")
             plot_cum_stats([stats_fp32, stats_bf16],
                                         fname=fname2)
             
@@ -444,7 +444,7 @@ class qErrorPlots(ErrorPlots):
             max_fp32 = self.baseline_err(X_fp32, name)
             max_errs  = (max_bf16, max_fp32)
 
-            fname = os.path.join(PLOT_DIR, f"max_errors_{name}_q.png")
+            fname = os.path.join(PLOT_DIR, f"max_errors_{name}_q.pdf")
             q_error_distributions([plot_bf16, plot_fp32], max_errs, 
                                   fname=fname)
 
