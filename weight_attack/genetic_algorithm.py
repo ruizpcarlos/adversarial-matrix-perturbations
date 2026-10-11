@@ -23,7 +23,7 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
                  pop_size: int = 50,
                  mating_pct: float = 0.4,
                  mating_temp: float = 0.05,
-                 offspring_mutation_rate: Optional[float] = None,  # None -> self.mutation_rate
+                 mutation_rate:float = 0.01,  # None -> self.mutation_rate
                  keep_full_history: bool = False,
                  **kwargs):
 
@@ -35,7 +35,7 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
         self.mating_pct    = mating_pct
         self.mating_pop    = int(mating_pct * pop_size)
         self.mating_temp   = mating_temp
-        self.offspring_mutation_rate = offspring_mutation_rate
+        self.mutation_rate = mutation_rate
 
         self.keep_full_history = keep_full_history
 
@@ -105,7 +105,7 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
 
     def create_offspring(self, parent1, parent2):
         return self.recombine(parent1, parent2,
-                              mutation_rate=self.offspring_mutation_rate)
+                              mutation_rate=self.mutation_rate)
 
     def mating_probabilities(self):
         # Boltzmann distribution over the mating pool's fitness.
@@ -145,7 +145,8 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
         self._record_generation()
 
     def search(self,
-               agg_stat: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None, 
+               agg_stat: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
+               test_batch_size:int=1024,
                early_stopping=True, verbose=False):
 
         self.n_evals   = 0
@@ -153,6 +154,8 @@ class AdvLayerGeneticAlgorithm(AdvLayerPerturbation):
         self.history.clear()
         self.population.clear()
         self.fitness_hist.clear()
+
+        self.draw_test_batch(test_batch_size)
 
         start_t = time.time()
         self.init_population(agg_stat)

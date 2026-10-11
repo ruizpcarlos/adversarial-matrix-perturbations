@@ -27,7 +27,7 @@ class AdvLayerPerturbation:
                  q:float,
                  max_calls:int = 32,
                  budget_calls: int = 1_000,
-                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
+                 objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
                  seed: int = 420,
                  weighted_sampling: bool = False,
                  mutation_rate:float = 0.01,
@@ -380,7 +380,7 @@ class AdvLayerPerturbation:
             if resample_every and k > 0 and k % resample_every == 0:
                 self.resample()
 
-                aux_fit, aux_n, _ = self.fitness(self.best_idx, agg_stat)
+                aux_fit, aux_n, _ = self.fitness(best_idx, agg_stat)
                 best_fit, best_n  = aux_fit, aux_n
 
             idx = self.random_geneset(weighted=weighted)

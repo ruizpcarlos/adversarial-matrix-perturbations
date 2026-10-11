@@ -50,7 +50,7 @@ class SimulatedAnnealingLayerSearch(AdvLayerPerturbation):
                T_min=1e-10,
                patience=25,
                agg_stat: Optional[Callable[[torch.Tensor, torch.Tensor], float]] = None,
-               resample_every=None,
+               resample:bool=True,
                test_batch_size=1024,
                verbose=False):
         
@@ -77,9 +77,8 @@ class SimulatedAnnealingLayerSearch(AdvLayerPerturbation):
         k, stale, L = 0, 0, L0
 
         while T > T_min and stale < patience and self.n_evals < self.budget_calls:
-            # Fitness values are only comparable within one (A, B) pair,
-            # so after a resample, re-anchor cur and best.
-            if resample_every and k > 0 and k % resample_every == 0:
+            
+            if resample:
                 self.resample()
                 cur_fit, cur_n, _   = self.fitness(cur, agg_stat)
                 best_fit, best_n, _ = self.fitness(best_idx, agg_stat)  # evaluate re-runs: best_n may change
