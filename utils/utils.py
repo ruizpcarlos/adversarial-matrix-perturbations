@@ -1,7 +1,7 @@
 import hashlib
 import pickle
 import platform
-from functools import partial
+from functools import update_wrapper
 
 import torch
 import psutil  # pip install psutil
@@ -13,8 +13,6 @@ from statsmodels.stats.multitest import multipletests
 import torch.nn.functional as F
 from torch.linalg import multi_dot
 import torchvision.models as models
-
-from functools import update_wrapper
 
 from utils.objective_func import vector_distance
 

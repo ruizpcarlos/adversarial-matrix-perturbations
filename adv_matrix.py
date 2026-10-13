@@ -103,7 +103,9 @@ class AdvPerturbation:
                  max_calls:int = 32,
                  budget_calls: int = 1_000,
                  objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-                 weighted_sampling: bool = False):
+                 weighted_sampling: bool = False,
+                 mutation_rate:float = 0.01,
+                 seed:int = 420):
 
         self.input_matrix = input_matrix
 
@@ -143,9 +145,10 @@ class AdvPerturbation:
                                     
         self.INFTY = torch.tensor(torch.inf)
         
-        self.input_shape = input_matrix.shape
-        self.strides = self._strides(self.input_shape)
-        self.total = int(input_matrix.numel())
+        self.input_shape    = input_matrix.shape
+        # self.strides        = self._strides(self.input_shape)
+        self.total          = int(input_matrix.numel())
+        self.mutation_rate = mutation_rate
             
         if self.tensor_prod: # Input is a matrix   
             self.n_input  = input_matrix.shape[0]
@@ -163,11 +166,13 @@ class AdvPerturbation:
         self.max_calls   = max_calls
         self.total_calls = self.budget_calls*max_calls
 
-        self.weighted_sampling = weighted_sampling
-        self.sample_weights = (
-            self._build_sample_weights()
-            if weighted_sampling else None
-        )
+
+        self.rng  = np.random.default_rng(seed)
+        self._cdf = None
+        self._w = None
+        if weighted_sampling:
+            self._build_sampling_weights()
+        
 
         # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
@@ -184,81 +189,94 @@ class AdvPerturbation:
         return err
         
     
-    def flat_to_3d(self, idx):
-        aux_idx = idx % (self.n_latent**2)
-        c = idx // (self.n_latent**2)
-        h = aux_idx // self.n_latent
-        w = aux_idx % self.n_latent
-        return c, h, w
+    # def flat_to_3d(self, idx):
+    #     aux_idx = idx % (self.n_latent**2)
+    #     c = idx // (self.n_latent**2)
+    #     h = aux_idx // self.n_latent
+    #     w = aux_idx % self.n_latent
+    #     return c, h, w
 
-    def _build_sample_weights(self, alpha: float=0.1, eps:float= 0.1) -> torch.Tensor:
-        score = wrap_score(self.input_matrix.reshape(-1),
-                        alpha=alpha, max_calls=self.max_calls).double()
-        n, total = score.numel(), score.sum()
-        uniform = torch.full_like(score, 1.0 / n)
-        if total <= 0:                       # nothing can wrap: fall back to uniform
-            return uniform
-        # Mixture: with prob (1-eps) follow the score, with prob eps sample uniformly
-        return (1 - eps) * score / total + eps * uniform
+    # def _build_sample_weights(self, alpha: float=0.1, eps:float= 0.1) -> torch.Tensor:
+    #     score = wrap_score(self.input_matrix.reshape(-1),
+    #                     alpha=alpha, max_calls=self.max_calls).double()
+    #     n, total = score.numel(), score.sum()
+    #     uniform = torch.full_like(score, 1.0 / n)
+
+    #     if total <= 0:                       # nothing can wrap: fall back to uniform
+    #         return uniform
+    #     # Mixture: with prob (1-eps) follow the score, with prob eps sample uniformly
+    #     return (1 - eps) * score / total + eps * uniform
+
+    def _build_sampling_weights(self, alpha=0.1, eps=0.1):
+        score = wrap_score(self.input_matrix.reshape(-1), alpha=alpha,
+                        max_calls=self.max_calls).double()
+        n, score_sum = score.numel(), score.sum()
+        w = (torch.full_like(score, 1.0 / n) if score_sum <= 0
+            else (1 - eps) * score / score_sum + eps / n)
+        self.sample_weights = w
+        self._w   = w.numpy().copy()          # pristine copy, never mutated
+        cdf = np.cumsum(self._w)
+        cdf /= cdf[-1]
+        self._cdf = cdf
 
 
-    def _draw_flat(self, num_samples: int, weighted=None):
+    # def _draw_flat(self, num_samples: int, weighted=None):
+    #     weighted = self.weighted_sampling if weighted is None else weighted
+    #     if not weighted or self.sample_weights is None:
+    #         return torch.randperm(self.total)[:num_samples]
+    #     return torch.multinomial(self.sample_weights, num_samples, replacement=False)
+
+
+    def _draw_distinct(self, n, exclude=None, weighted=None):
+        """n distinct flat indices, none in `exclude` (sorted array). Returns sorted int64.
+        Drawing with replacement and keeping first occurrences is exactly successive
+        sampling without replacement, so the weighted case matches the old multinomial."""
+        
         weighted = self.weighted_sampling if weighted is None else weighted
-        if not weighted or self.sample_weights is None:
-            return torch.randperm(self.total)[:num_samples]
-        return torch.multinomial(self.sample_weights, num_samples, replacement=False)
+        cdf      = self._cdf if cdf is None else cdf
+        use_w    = weighted and cdf is not None
+        out      = np.empty(0, dtype=np.int64)
+        
+        while out.size < n:
+            need = n - out.size
+            m    = int(need * 1.25) + 8
+            if use_w:
+                cand = np.searchsorted(cdf, self.rng.random(m), side="right")
+                np.clip(cand, 0, self.total - 1, out=cand)
+            else:
+                cand = self.rng.integers(0, self.total, size=m)
+                cand = cand.astype(np.int64)
+        
+            _, first = np.unique(cand, return_index=True)    # dedupe, keep order of appearance
+            cand = cand[np.sort(first)]
+            cand = cand[self._not_in_sorted(cand, exclude)]
+            if out.size:
+                cand = cand[~np.isin(cand, out)]
+            out = np.concatenate([out, cand[:need]])
+        
+        return np.sort(out)
     
 
-    def _sample_entries(self, num_samples=1, weighted=None):
-        flat_idx = self._draw_flat(num_samples, weighted)
-
-        if not self.tensor_prod:
-            indices = self.flat_to_3d(flat_idx)
-            return (torch.zeros(num_samples, dtype=int), *indices)
-        else:
-            return (flat_idx // self.n_latent, flat_idx % self.n_latent)
-    
-    # def _sample_entries(self, num_samples=1):
-
-    #     flat_idx = torch.randint(self.input_matrix.numel(), 
-    #                             (num_samples,)
-    #                             )
+    # def _sample_entries(self, num_samples=1, weighted=None):
+    #     flat_idx = self._draw_flat(num_samples, weighted)
 
     #     if not self.tensor_prod:
     #         indices = self.flat_to_3d(flat_idx)
-    #         return (torch.zeros(num_samples, dtype=int),
-    #                     *indices)
+    #         return (torch.zeros(num_samples, dtype=int), *indices)
     #     else:
     #         return (flat_idx // self.n_latent, flat_idx % self.n_latent)
-
-    # def model_err(self, x_cpu, x_gpu):
-    #     """
-    #     Used to calculate the error for forward pass multiplication:
-    #     mat_cpu: list of matrices in CPU device
-    #     mat_gpu: list of matrices hosted in GPU
-    #     """
-    #     with torch.no_grad():
-    #         y_cpu  = self.nn(x_cpu)
-    #         y_gpu  = self.nn_gpu(x_gpu)
-        
-    #     y_diff = (y_cpu - y_gpu.cpu()).ravel().squeeze()
-
-    #     if len(y_diff.shape) > 0:
-    #         _y = vector_norm(y_diff, ord=np.inf).item()
-    #     else:
-    #         _y = y_diff.item()
-
-    #     return _y
+    
+    def _sample_entries(self, num_samples=1, weighted=None, cdf=None):
+        return self._draw_distinct(num_samples, weighted=weighted, cdf=cdf)
 
     def _product_err(self, mat_cpu, mat_gpu):
         err = product_err(mat_cpu, mat_gpu, self.objective_fn)
         return err.item()
     
-
+    @torch.inference_mode()
     def model_err(self, x_cpu, x_gpu):
-        with torch.no_grad():
-            y_cpu  = self.nn(x_cpu)
-            y_gpu  = self.nn_gpu(x_gpu)
+        y_cpu  = self.nn(x_cpu)
+        y_gpu  = self.nn_gpu(x_gpu)
 
         d = self.objective_fn(y_cpu, y_gpu.cpu())
         
@@ -273,11 +291,15 @@ class AdvPerturbation:
 
         if weighted and not self.weighted_sampling:
             raise ValueError(f"Passed weighted={weighted}  but there are no weights available for sampling")
+
+        cdf = self._cdf if weighted else None
+        w   = self._w.copy() if weighted else None
         
         _nextafter.reset()
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
+        X_flat = X_.view(-1)
 
         if self.tensor_prod:
             mat_cpu = [None] + self.weights
@@ -291,34 +313,39 @@ class AdvPerturbation:
         maxed   = set()
         max_err = -1
         stale   = 0      
-        n_done  = n_iter 
+        n_done  = n_iter
+        exhausted = False
 
         iterator = tqdm(range(n_iter)) if verbose else range(n_iter)
 
         for i in iterator:
 
-            idx = self._sample_entries(weighted=weighted)
-            key = tuple(int(i) for i in idx)
-            while key in maxed:
-                idx = self._sample_entries(weighted=weighted)
-                key = tuple(int(i) for i in idx)
+            idx = self._sample_entries(weighted=weighted, cdf=cdf)
+            key = (int(idx[0]),)
+            if not weighted and len(maxed) >= self.total:   # unweighted guard
+                n_done = i
+                break
 
-            counts[key] = counts.get(key, 0) + 1
+            counts[key] = counts.get(key, 0) + step
             if counts[key] >= self.max_calls:
                 maxed.add(key)
+                if weighted:
+                    w[idx[0]] = 0.0
+                    if w.sum() <= 0:
+                        exhausted = True                     # nothing left to sample
+                    else:
+                        cdf = np.cumsum(w)
+                        cdf /= cdf[-1]
 
-            if step > 1:
-                for _ in range(step):
-                    X_[idx] = _nextafter(X_[idx], self.INFTY)
-            else:
-                X_[idx] = _nextafter(X_[idx], self.INFTY)
-
+            for _ in range(step):
+                X_flat[idx] = _nextafter(X_flat[idx], self.INFTY)
+            
             X_gpu.copy_(X_, non_blocking=True)
 
             if self.tensor_prod:
                 mat_cpu[0] = X_
                 mat_gpu[0] = X_gpu
-                _y = product_err(mat_cpu, mat_gpu)
+                _y = self._product_err(mat_cpu, mat_gpu)
             else:
                 _y = self.model_err(X_, X_gpu)
 
@@ -330,6 +357,10 @@ class AdvPerturbation:
                 stale    = 0
             else:
                 stale += 1
+
+            if exhausted:
+                n_done = i + 1
+                break
 
             # NEW: early stopping
             if early_stopping and stale >= n_stopping:
@@ -347,11 +378,15 @@ class AdvPerturbation:
     
     def compute_max_err(self, 
                         ulp_calls: Optional[int] = None,
-                        indices: Optional[Tuple[torch.Tensor, ...]] = None) -> Tuple[int, float]:
+                        # indices: Optional[Tuple[torch.Tensor, ...]] = None) -> Tuple[int, float]:
+                        indices: Optional[np.array] = None) -> Tuple[int, float]:
 
         X_    = self.input_matrix.clone()
         X_gpu = X_.to("cuda")
-        # infty = torch.tensor(torch.inf)
+
+        if indices is not None:
+            idx = torch.from_numpy(indices)  # int64
+            X_flat = X_.view(-1)
 
         if self.tensor_prod:
             mat_cpu = [X_] + self.weights
@@ -366,10 +401,9 @@ class AdvPerturbation:
         for i in range(ulp_calls):
 
             if indices is not None:
-                # torch wrapped in counter
-                X_[indices] = _nextafter(X_[indices], self.INFTY)
+                X_flat[idx] = _nextafter(X_flat[idx], self.INFTY)
             else:
-                X_ = _nextafter(X_, self.INFTY)
+                X_.copy_(_nextafter(X_, self.INFTY))
 
             X_gpu.copy_(X_, non_blocking=True)
 
@@ -386,13 +420,15 @@ class AdvPerturbation:
 
         return calls_to_max, max_err
     
-    def compute_adv_input(self)-> torch.Tensor:
-
+    def compute_adv_input(self) -> torch.Tensor:
         X_adv        = self.input_matrix.clone()
         idx, n_calls = self.solution
 
+        X_flat = X_adv.view(-1)                       # shares storage with X_adv
+        idx  = torch.as_tensor(idx, dtype=torch.long)
+
         for _ in range(n_calls):
-            X_adv[idx] = torch.nextafter(X_adv[idx], self.INFTY)
+            X_flat[idx] = torch.nextafter(X_flat[idx], self.INFTY)
 
         self.X_adv = X_adv
         return X_adv
@@ -412,53 +448,80 @@ class AdvPerturbation:
     ###    MUTATION FUNCTIONS    ###
     ################################
     @staticmethod
-    def _strides(shape):
-        strides = [1] * len(shape)
-        for i in range(len(shape) - 2, -1, -1):
-            strides[i] = strides[i + 1] * shape[i + 1]
-        return strides
-    
-    # -------- replaces index_to_binary_string --------
-    def indices_to_geneset(self, *indices):
-        """Multi-dim indices -> sorted int64 array of flat positions (the genome)."""
-        idx = [np.asarray(i, dtype=np.int64) for i in indices]
-        flat = np.zeros_like(idx[0])
-        strides =self._strides(self.input_shape)
-        for i, stride in zip(idx, strides):
-            flat += i * stride
-        return np.sort(flat)
+    def _not_in_sorted(cand, sorted_arr):
+        """Boolean mask: which cand are NOT in sorted_arr (binary search, O(m log k))."""
+        if sorted_arr is None or sorted_arr.size == 0:
+            return np.ones(cand.shape, dtype=bool)
+        pos = np.searchsorted(sorted_arr, cand)
+        pos[pos == sorted_arr.size] = sorted_arr.size - 1
+        return sorted_arr[pos] != cand
 
-    # -------- replaces binary_string_to_index --------
-    def geneset_to_indices(self, genome):
-        """Sorted int64 array of flat positions -> multi-dim index tuple."""
-        flat = np.asarray(genome, dtype=np.int64)
-        remainder = flat.copy()
-        indices = []
-        for stride in self.strides:
-            indices.append(remainder // stride)
-            remainder %= stride
-        return tuple(indices)
+
+    def random_geneset(self, weighted=None):
+        return self._draw_distinct(self.n_perturbed, weighted=weighted)
+
+
+    # @staticmethod
+    # def _strides(shape):
+    #     strides = [1] * len(shape)
+    #     for i in range(len(shape) - 2, -1, -1):
+    #         strides[i] = strides[i + 1] * shape[i + 1]
+    #     return strides
+    
+    # # -------- replaces index_to_binary_string --------
+    # def indices_to_geneset(self, *indices):
+    #     """Multi-dim indices -> sorted int64 array of flat positions (the genome)."""
+    #     idx = [np.asarray(i, dtype=np.int64) for i in indices]
+    #     flat = np.zeros_like(idx[0])
+    #     strides =self._strides(self.input_shape)
+    #     for i, stride in zip(idx, strides):
+    #         flat += i * stride
+    #     return np.sort(flat)
+
+    # # -------- replaces binary_string_to_index --------
+    # def geneset_to_indices(self, genome):
+    #     """Sorted int64 array of flat positions -> multi-dim index tuple."""
+    #     flat = np.asarray(genome, dtype=np.int64)
+    #     remainder = flat.copy()
+    #     indices = []
+    #     for stride in self.strides:
+    #         indices.append(remainder // stride)
+    #         remainder %= stride
+    #     return tuple(indices)
     
     # -------- replaces mutate_binary_string --------
-    def mutate_geneset(self, genome, n_mutations=1):
-        """genome: 1D int array of active flat positions (length k << total)."""
-        genome = np.asarray(genome, dtype=np.int64)
-        k = len(genome)
+    def mutate_geneset(self, genome, n_mutations=None):
+        """Replace n_mutations entries. Default: mutation_rate * k (at least 1)."""
+        genome = np.array(genome, dtype=np.int64)            # copy: never mutate the parent
+        k = genome.size
+        n = max(1, int(round(self.mutation_rate * k))) if n_mutations is None else n_mutations
+        n = min(n, k)
+    
+        clear_pos = self.rng.choice(k, size=n, replace=False)
+        new_vals  = self._draw_distinct(n, exclude=genome)   # new entries are not already active
+        genome[clear_pos] = new_vals
+        genome.sort()
+        return genome
+    
+    # def mutate_geneset(self, genome, n_mutations=1):
+    #     """genome: 1D int array of active flat positions (length k << total)."""
+    #     genome = np.asarray(genome, dtype=np.int64)
+    #     k = len(genome)
 
-        # pick which currently-on positions to clear
-        clear_pos = np.random.choice(k, size=n_mutations, replace=False)
+    #     # pick which currently-on positions to clear
+    #     clear_pos = np.random.choice(k, size=n_mutations, replace=False)
 
-        active = set(genome.tolist())
-        new_vals = set()
-        while len(new_vals) < n_mutations:
-            for cand in self._draw_flat(4 * n_mutations).tolist():
-                if cand not in active and cand not in new_vals:
-                    new_vals.add(cand)
-                    if len(new_vals) == n_mutations:
-                        break
+    #     active = set(genome.tolist())
+    #     new_vals = set()
+    #     while len(new_vals) < n_mutations:
+    #         for cand in self._draw_flat(4 * n_mutations).tolist():
+    #             if cand not in active and cand not in new_vals:
+    #                 new_vals.add(cand)
+    #                 if len(new_vals) == n_mutations:
+    #                     break
 
-        genome[clear_pos] = list(new_vals)
-        return np.sort(genome)
+    #     genome[clear_pos] = list(new_vals)
+    #     return np.sort(genome)
 
     def crossover_uniform(self, g1, g2):
         s1, s2 = set(np.asarray(g1).tolist()), set(np.asarray(g2).tolist())
@@ -475,9 +538,14 @@ class AdvPerturbation:
     
         return (np.array(sorted(new_s1), dtype=np.int64),
                 np.array(sorted(new_s2), dtype=np.int64))
-    
-    def recombine(self, g1, g2):
+
+    def recombine(self, g1, g2, mutation_rate=None):
         o1, o2 = self.crossover_uniform(g1, g2)
-        o1 = self.mutate_geneset(o1)
-        o2 = self.mutate_geneset(o2)
-        return o1, o2
+        n1 = None if mutation_rate is None else max(1, int(round(mutation_rate * o1.size)))
+        return self.mutate_geneset(o1, n1), self.mutate_geneset(o2, n1)
+    
+    # def recombine(self, g1, g2):
+    #     o1, o2 = self.crossover_uniform(g1, g2)
+    #     o1 = self.mutate_geneset(o1)
+    #     o2 = self.mutate_geneset(o2)
+    #     return o1, o2
