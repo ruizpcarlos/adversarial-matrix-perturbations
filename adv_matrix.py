@@ -103,8 +103,8 @@ class AdvPerturbation:
                  max_calls:int = 32,
                  budget_calls: int = 1_000,
                  objective_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-                 mutation_rate:float = 0.01,
                  weighted_sampling: bool = False,
+                 mutation_rate:float = 0.01,
                  seed:int = 420):
 
         self.input_matrix = input_matrix
@@ -169,13 +169,10 @@ class AdvPerturbation:
 
         self.rng  = np.random.default_rng(seed)
         self._cdf = None
-        self._w   = None
-
-        self.weighted_sampling = weighted_sampling
+        self._w = None
         if weighted_sampling:
             self._build_sampling_weights()
         
-
         # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
 
@@ -347,7 +344,7 @@ class AdvPerturbation:
             if self.tensor_prod:
                 mat_cpu[0] = X_
                 mat_gpu[0] = X_gpu
-                _y = product_err(mat_cpu, mat_gpu)
+                _y = self._product_err(mat_cpu, mat_gpu)
             else:
                 _y = self.model_err(X_, X_gpu)
 
