@@ -44,7 +44,6 @@ MAX_CALLS = 32
 EVAL_SEED_OFFSET = 10_000
 BUDGET = 2_000
 
-
 # ----------------------------------------------------------------------
 # Data
 # ----------------------------------------------------------------------
@@ -156,6 +155,62 @@ def run_one(name, spec, seed, model, model_name, feats, args):
 # ----------------------------------------------------------------------
 # Reporting
 # ----------------------------------------------------------------------
+def _tex(s):
+    return s.replace("_", r"\_")
+
+
+def render_latex_results(df, adj, benchmark_name="RANDOM", caption=None, label="tab:layer_results"):
+    """
+    df  : per-run DataFrame built in summarize() (columns: algo, max_err, frac_up, ...)
+    adj : output of adjusted_pvals(...) -> {algo: {"p_adj", "significant", ...}}
+    """
+    g = df.groupby("algo")
+    algos = [benchmark_name] + sorted(a for a in df.algo.unique() if a != benchmark_name)
+    best = g["max_err"].mean().idxmax()
+    n_seeds = int(g["seed"].count().min())
+
+    lines = [
+        r"\begin{table}[h]",
+        r"\centering",
+        r"\begin{tabular}{lcccccc}",
+        r"\toprule",
+        r"Algorithm & Held-out score & Frac. up & Frac. down & Mean log-ratio & Budget (\%) & Adj. $p$-value \\",
+        r"\midrule",
+    ]
+
+    for a in algos:
+        d = g.get_group(a)
+        m, sd = d["max_err"].mean(), d["max_err"].std()
+        score = "$" + ("%+.3f" % m) + " \\pm %.3f$" % sd
+
+        budget = 100 * d["n_evals"].mean() / BUDGET
+
+        if a == benchmark_name:
+            p = "--"
+        else:
+            r = adj[a]
+            p = "%.2e" % r["p_adj"] + (r"$^{**}$" if r["significant"] else "")
+
+        lines.append(
+            "%s & %s & %.3f & %.3f & %+.3f & %.1f & %s \\\\"
+            % (_tex(a), score, d["frac_up"].mean(), d["frac_down"].mean(),
+               d["mean_log_ratio"].mean(), budget, p)
+        )
+        if a == benchmark_name:
+            lines.append(r"\midrule")
+
+    lines += [
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\caption{%s}" % (caption or
+            f"Held-out score (mean $\\pm$ std over {n_seeds} seeds). "
+            r"Adjusted $p$-values are Wilcoxon signed-rank vs.\ RANDOM with BH-FDR correction; "
+            r"$^{*}$ denotes significance."),
+        r"\label{%s}" % label,
+        r"\end{table}",
+    ]
+    return "\n".join(lines)
+
 def summarize(results, out_prefix):
     df = pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("curve")}
                        for r in results.values()])
@@ -177,9 +232,17 @@ def summarize(results, out_prefix):
     common = sorted(set.intersection(*[set(df[df.algo == a].seed) for a in algos]))
     by_algo = {a: [results[(a, s)] for s in common] for a in algos}
     print(f"\n=== Paired Wilcoxon vs RANDOM (alternative='greater', {len(common)} seeds) ===")
-    for a, r in adjusted_pvals(by_algo, benchmark_key="RANDOM", alternative="greater").items():
+    adj = adjusted_pvals(by_algo, benchmark_key="RANDOM", alternative="greater")
+    for a, r in adj.items():
         print(f"{a:9s} median_diff={r['median_diff']:+.4f}  p={r['p_value']:.3g}  "
               f"p_adj={r['p_adj']:.3g}  {'*' if r['significant'] else ''}")
+
+    latex = render_latex_results(df, adj, benchmark_name="RANDOM",
+                                 label=f"tab:{os.path.basename(out_prefix)}")
+    print("\n=== LaTeX table ===")
+    print(latex)
+    # with open(out_prefix + "_table.tex", "w") as f:
+    #     f.write(latex + "\n")
 
     # Head-to-head: best GA config vs best SA config (two-sided)
     def best(prefix):
@@ -213,6 +276,7 @@ def plot_curves(results, algos, seeds, fname):
         m, sd = np.nanmean(Y, 0), np.nanstd(Y, 0)
         ax.plot(grid, m, label=a)
         ax.fill_between(grid, m - sd, m + sd, alpha=0.12)
+    ax.axhline(y=0, c="tab:grey", ls="--")
     ax.set_xlabel("fitness evaluations")
     ax.set_ylabel("score of incumbent on held-out batch C")
     ax.set_title(f"Anytime performance (mean ± std, {len(seeds)} seeds)")

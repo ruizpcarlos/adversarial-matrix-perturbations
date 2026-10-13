@@ -19,6 +19,19 @@ from utils.utils import wrap_score
 from utils.objective_func import vector_distance, net_success_pct, cvar_low, mean_log_ratio
 
 
+IMAGENETTE_TO_IMAGENET = {
+    0: 0,     # tench
+    1: 217,   # English springer
+    2: 482,   # cassette player
+    3: 491,   # chain saw
+    4: 497,   # church
+    5: 566,   # French horn
+    6: 569,   # garbage truck
+    7: 571,   # gas pump
+    8: 574,   # golf ball
+    9: 701,   # parachute
+}
+
 class AdvLayerPerturbation:
 
     def __init__(self,
@@ -59,7 +72,7 @@ class AdvLayerPerturbation:
 
         self.objective_fn = (
                     objective_fn if objective_fn is not None
-                    else partial(vector_distance, batch=True)
+                    else partial(vector_distance, batch=True, classes = list(IMAGENETTE_TO_IMAGENET.values()))
                     )
         
         self.default_agg = net_success_pct
