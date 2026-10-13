@@ -135,9 +135,16 @@ class AdvLayerPerturbation:
         """
         Helper to set features if they have been precomputed and read from cache.
         """
-        self.features, self.features_val = train, val
+        feat_aux    = torch.cat([train, val])
         self.n_data = train.shape[0]
-        self.n_val = None if val is None else val.shape[0]
+        self.n_val  = None if val is None else val.shape[0]
+                
+        indx     = torch.from_numpy(self.batch_rng.permutation(feat_aux.shape[0]))
+        feat_aux = feat_aux[indx]
+
+        self.features = feat_aux[:self.n_data]
+        self.features_val = feat_aux[self.n_data:]
+
         self._extractor = None
 
 
