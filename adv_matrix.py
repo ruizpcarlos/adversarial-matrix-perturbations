@@ -173,7 +173,6 @@ class AdvPerturbation:
         if weighted_sampling:
             self._build_sampling_weights()
         
-
         # Wrap the function to count calls
         self.compute_max_err = CallTracker(self.compute_max_err)
 
@@ -227,7 +226,7 @@ class AdvPerturbation:
     #     return torch.multinomial(self.sample_weights, num_samples, replacement=False)
 
 
-    def _draw_distinct(self, n, exclude=None, weighted=None):
+    def _draw_distinct(self, n, exclude=None, weighted=None, cdf=None):
         """n distinct flat indices, none in `exclude` (sorted array). Returns sorted int64.
         Drawing with replacement and keeping first occurrences is exactly successive
         sampling without replacement, so the weighted case matches the old multinomial."""

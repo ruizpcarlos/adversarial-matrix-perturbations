@@ -41,8 +41,8 @@ def plot_max(Y_max, Y_hist, labels, n_latent, p, fname=None, show_zero=True):
         ax2.axhline(y=0, linestyle = "--", color = "grey")
 
     if fname is not None:
-        fname = "algorithm_perf" + fname + f"_{p}.png"
-        plt.savefig(fname)
+        fname = "algorithm_perf" + fname + f"_{p}.pdf"
+        plt.savefig(fname, format="pdf")
 
 
 def annealing_plot(y, y_max, opt_params, n_latent, p, fname=None):
@@ -63,8 +63,8 @@ def annealing_plot(y, y_max, opt_params, n_latent, p, fname=None):
     plt.title(f"Simmulated annealing on {n_latent} dims\n perturbed {p} entries")
     plt.legend()
     if fname:
-        fname = "annealingplot_" + fname + f"_{p}.png"
-        plt.savefig(fname)
+        fname = "annealingplot_" + fname + f"_{p}.pdf"
+        plt.savefig(fname, format="pdf")
 
 def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fname=None):
     """
@@ -152,7 +152,7 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
 
     fig.tight_layout()
     if fname is not None:
-        fig.savefig(fname, bbox_inches="tight")
+        fig.savefig(fname, bbox_inches="tight", format="pdf")
     plt.show()
 
     # return fig, (ax1, ax2)
@@ -200,7 +200,7 @@ def iter_error(Ys, show_zero:bool=True, fname:str=None):
         ax2.axhline(y=0, linestyle="--", color="grey")
 
     if fname is not None:
-        fig.savefig(fname, bbox_inches="tight")
+        fig.savefig(fname, bbox_inches="tight", format="pdf")
         print(f"Saved error signals to {fname}")
 
     plt.show()
@@ -244,7 +244,7 @@ def iter_error_distributions(Ys, fname=None):
         ax2.hist(y_dist, bins=bins, orientation="horizontal")
 
     if fname is not None:
-        fig.savefig(fname, bbox_inches="tight")
+        fig.savefig(fname, bbox_inches="tight", format="pdf")
 
     plt.show()
 
@@ -286,7 +286,7 @@ def plot_error_histograms(y_dist, func_names, dtypes, fname=None):
                 ax.tick_params(labelrotation=45)
 
         if fname is not None:
-            fig.savefig(fname, bbox_inches="tight")
+            fig.savefig(fname, bbox_inches="tight", format="pdf")
             print(f"Saved error distribution plots to {fname}")
 
         plt.tight_layout()
@@ -321,7 +321,7 @@ def plot_cum_stats(Y, fname=None):
 
     fig.legend(handles=handles, loc='upper center', ncol=len(labels))
     if fname is not None:
-        fig.savefig(fname, bbox_inches="tight")
+        fig.savefig(fname, bbox_inches="tight", format="pdf")
     plt.show()
 
 
@@ -370,7 +370,7 @@ def q_error_distributions(Ys, X_baseline, fname=None):
         ax2.axhline(y=baseline, c = "tab:grey", linestyle=":")
 
     if fname is not None:
-        fig.savefig(fname, bbox_inches="tight")
+        fig.savefig(fname, bbox_inches="tight", format="pdf")
 
     plt.show()
 
