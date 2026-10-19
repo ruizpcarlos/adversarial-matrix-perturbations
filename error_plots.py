@@ -120,9 +120,9 @@ class ErrorPlots:
         self.DTYPES = [torch.bfloat16, torch.float32]
 
         self.n_samples  = n_samples
-        self.func_names = ["random",
-                           f"{model_name}_clf",
-                           model_name
+        self.func_names = ["Random",
+                           f"{model_name} classifier",
+                           f"Full {model_name}"
                            ]
 
         model, W   = load_model_and_weights(model_name)
@@ -339,12 +339,12 @@ class ErrorPlots:
             stats_bf16 = cum_stats(err_bf16)
             stats_fp32 = cum_stats(err_fp32)
             
-            bf16_data = tensor_to_plotting_inputs(err_bf16)
-            fp32_data = tensor_to_plotting_inputs(err_fp32)
+            # bf16_data = tensor_to_plotting_inputs(err_bf16)
+            # fp32_data = tensor_to_plotting_inputs(err_fp32)
 
-            fname1 = os.path.join(PLOT_DIR, f"acc_distributions_{name}.pdf")
-            iter_error_distributions((bf16_data, fp32_data),
-                                        fname=fname1)
+            # fname1 = os.path.join(PLOT_DIR, f"acc_distributions_{name}.pdf")
+            # iter_error_distributions((bf16_data, fp32_data),
+            #                             fname=fname1)
             
             fname2 = os.path.join(PLOT_DIR, f"cum_stats_{name}.pdf")
             plot_cum_stats([stats_fp32, stats_bf16],
@@ -454,7 +454,7 @@ class qErrorPlots(ErrorPlots):
 if __name__=="__main__":
 
     SEED       = 161
-    model_name = "ResNet"
+    model_name = "ResNet18"
 
     args = parse_args()
 
@@ -480,13 +480,13 @@ if __name__=="__main__":
 
 
     # DTYPE - MODEL HISTOGRAMS
-    funcname = f'{model_name}_clf'
+    funcname = f'{model_name} classifier'
     
     err_plots = ErrorPlots(model_name=model_name, seed=SEED)
     y_hist    = err_plots.error_distribution(N_CALLS, N_CALLS_BF16)
 
     err_plots.plot_distributions(y_hist)
-    err_plots.plot_err_signals(y_hist, funcname)
+    err_plots.plot_err_signals(y_hist, funcname, show_zero=True)
 
 
     # CUMULATIVE ERROR DISTRIBUTIONS
