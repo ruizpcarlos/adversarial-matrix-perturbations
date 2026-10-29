@@ -1,9 +1,9 @@
-
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from matplotlib.lines import Line2D
+from matplotlib.ticker import MultipleLocator
 
 
 def plot_max(Y_max, Y_hist, labels, n_latent, p, fname=None, show_zero=True):
@@ -37,8 +37,12 @@ def plot_max(Y_max, Y_hist, labels, n_latent, p, fname=None, show_zero=True):
     ax2.hist(Y_hist_np, density=False, bins=n_bins, orientation = "horizontal")
 
     if show_zero:
-        ax1.axhline(y=0, linestyle = "--", color = "grey")
-        ax2.axhline(y=0, linestyle = "--", color = "grey")
+        ax1.axhline(y=0, linestyle = "--", color = "grey", 
+                    label = "Non-perturbed matrix error")
+        ax1.legend()
+        ax2.axhline(y=0, linestyle = "--", color = "grey", 
+                    label = "Non-perturbed matrix error")
+        ax2.legend()
 
     if fname is not None:
         fname = "algorithm_perf" + fname + f"_{p}.pdf"
@@ -87,11 +91,13 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
     """
     X_LABEL = "ULP calls"
     COLORS  = plt.cm.tab10.colors
-
+    
+    tick_step = 64
     if qs_list is None:
         delta_f32  = delta_f32.unsqueeze(0)
         delta_bf16 = delta_bf16.unsqueeze(0)
         COLORS = ["black"]
+        tick_step = 256
 
     plot_x   = range(delta_f32.shape[2])
     iter_aux = range(delta_f32.shape[0])
@@ -107,6 +113,7 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
         # target = ax1_2n if log_scale else ax1
         ax1.plot(plot_x, y[1, :], c=c, linestyle="--")  # 2-norm
 
+    ax1.xaxis.set_major_locator(MultipleLocator(tick_step))
     ax1.set_xlabel(X_LABEL)
     ax1.set_title("Single Precision (fp32)")
     ax1.set_ylabel("Delta size")
@@ -124,6 +131,7 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
         ax2.plot(plot_x, y[0, :], c=c)  # Max-norm
         ax2.plot(plot_x, y[1, :], c=c, linestyle="--")  # 2-norm
 
+    ax2.xaxis.set_major_locator(MultipleLocator(64))
     ax2.set_xlabel(X_LABEL)
     ax2.set_title("Half Precision (bfloat16)")
     ax2.set_ylabel("Delta size")
@@ -132,23 +140,29 @@ def delta_growth_plots(delta_f32, delta_bf16, qs_list=None, log_scale=True, fnam
     ax2.grid(True, which="both", alpha=0.3)
 
     # --- Legends ---
+    style_handles = [
+        Line2D([0], [0], color="black", lw=2, linestyle="-",  label="Max-norm"),
+        Line2D([0], [0], color="black", lw=2, linestyle="--", label="2-norm"),
+    ]
+
+    if qs_list is not None:
+        host, loc, x = ax1, "upper right", -0.22   # left of the plots
+    else:
+        host, loc, x = ax2, "upper left", 1.02     # right of the plots
+
     if qs_list is not None:
         color_handles = [
-            Line2D([0], [0], color=COLORS[k % len(COLORS)], lw=2, label=f"q = {int(100*p)}%")
+            Line2D([0], [0], color=COLORS[k % len(COLORS)], lw=2,
+                label=f"q = {int(100*p)}%")
             for k, p in enumerate(qs_list)
         ]
-        leg1 = ax2.legend(handles=color_handles, title="Noisy indices (%)",
-                       loc="upper left", bbox_to_anchor=(1.15, 1.0),
-                       borderaxespad=0.)
-        ax2.add_artist(leg1)
+        leg_q = host.legend(handles=color_handles, title="Noisy indices (%)",
+                            loc=loc, bbox_to_anchor=(x, 1.0), borderaxespad=0.)
+        host.add_artist(leg_q)   # must come before the next legend() call
 
-    style_handles = [
-        Line2D([0], [0], color="black", lw=2, linestyle="-",  label="Max-norm (lefty-axis, log)" if log_scale else "Max-norm"),
-        Line2D([0], [0], color="black", lw=2, linestyle="--", label="2-norm (right y-axis)" if log_scale else "2-norm"),
-    ]
-    ax2.legend(handles=style_handles, title="Norm",
-               loc="upper left", bbox_to_anchor=(1.15, 0.4),
-               borderaxespad=0.)
+    host.legend(handles=style_handles, title="Norm",
+                loc=loc, bbox_to_anchor=(x, 0.5 if qs_list is not None else 1.0),
+            borderaxespad=0.)
 
     fig.tight_layout()
     if fname is not None:
@@ -186,18 +200,21 @@ def iter_error(Ys, show_zero:bool=True, fname:str=None):
 
         n_values = Y.unique().numel()
 
-        fp  = "Half" if row==0 else "Single"
-        fp2 = "bf16" if row==0 else "fp32"
+        tick_step  = 256 if row==0 else 64
 
-        ax1.set_title(f"Errors in {fp} Precision ({fp2})")
+        #ax1.set_title(f"Errors in {fp} Precision ({fp2})")
         ax1.set_xlabel("ULP Calls")
-        ax1.set_ylabel("Error")
-        ax2.set_title(f"Error distribution \n {n_values} unique values")
+        ax1.xaxis.set_major_locator(MultipleLocator(tick_step))
+        ax1.set_ylabel("Absolute Error")
+        ax2.set_title(f"{n_values} unique values")
         ax2.hist(Y_np.ravel(), bins=n_values, orientation="horizontal")
 
-    if show_zero:
-        ax1.axhline(y=0, linestyle="--", color="grey")
-        ax2.axhline(y=0, linestyle="--", color="grey")
+        if show_zero:
+            ax1.axhline(y=Y_np[0][0], linestyle="--", color="grey", 
+                           label = "Non-perturbed matrix error")
+            ax1.legend()
+       
+            ax2.axhline(y=Y_np[0][0], linestyle="--", color="grey")
 
     if fname is not None:
         fig.savefig(fname, bbox_inches="tight", format="pdf")
@@ -256,7 +273,7 @@ def plot_error_histograms(y_dist, func_names, dtypes, fname=None):
         
         fig, axs = plt.subplots(nrows=n_rows, ncols=2,
                                 figsize=(10, 4*n_rows))
-        fig.suptitle("Error distributions")
+        # fig.suptitle("Error distributions")
 
         for k, func in enumerate(func_names):
 
@@ -266,7 +283,8 @@ def plot_error_histograms(y_dist, func_names, dtypes, fname=None):
                 ax = axs[k, j]
 
                 if k == 0:
-                    ax.set_title(f"Dtype = {dtype}", fontsize=10)
+                    header_aux = "bfloat16" if dtype==torch.bfloat16 else "float32"
+                    ax.set_title(f"{header_aux}", fontsize=10)
                 if j == 0:
                     ax.annotate(f"F = {func}", (0, 0.5),
                                 xytext=(-30, 0),
@@ -280,10 +298,9 @@ def plot_error_histograms(y_dist, func_names, dtypes, fname=None):
 
                 ax.hist(Y_np, bins=bins, alpha=0.8, # label=f"{n_values} values"
                         )
-                # ax.axvline(x=0, linestyle="--", color="red")
-
-                ax.set(xlabel=f"{n_values} values")
+                ax.ticklabel_format(axis="x", style="sci", scilimits=(0, 0))  # always use sci notation
                 ax.tick_params(labelrotation=45)
+                ax.set(xlabel=f"{n_values} values")
 
         if fname is not None:
             fig.savefig(fname, bbox_inches="tight", format="pdf")
@@ -304,8 +321,10 @@ def plot_cum_stats(Y, fname=None):
         y_stats = Y[i]
         x = range(y_stats.shape[1])
 
-        fp2 = "bf16" if i==1 else "fp32"
+        fp2       = "bf16" if i==1 else "fp32"
+        tick_step = 64 if i==1 else 256
 
+        ax.xaxis.set_major_locator(MultipleLocator(tick_step))
         ax.set_title(f"Cumulative Error Stats ({fp2})")
         ax.set_ylabel("Error")
         ax.set_xlabel("ULP Calls")
@@ -319,7 +338,9 @@ def plot_cum_stats(Y, fname=None):
         for label, ls in zip(labels, linestyles)
     ]
 
-    fig.legend(handles=handles, loc='upper center', ncol=len(labels))
+    axes[0].legend(handles=handles, loc='upper right', 
+                   bbox_to_anchor=(-0.22, 1.0) #, ncols=len(labels)
+                   )
     if fname is not None:
         fig.savefig(fname, bbox_inches="tight", format="pdf")
     plt.show()
@@ -351,8 +372,8 @@ def q_error_distributions(Ys, X_baseline, fname=None):
         fp = "fp32" if row==1 else "bf16"
 
         sns.stripplot(data=df, x="q", y="error", ax=ax1)
-        ax1.set_title(f"Max Error Distributions ({fp})")
-        ax1.set_ylabel("Max Error")
+        # ax1.set_title(f"Max Error Distributions ({fp})")
+        ax1.set_ylabel(f"Max Abs Error ({fp})")
         ax1.set_xlabel("% of perturbed indices (q)")
         ax1.axhline(y=baseline,
                     c = "tab:grey", linestyle=":",
@@ -365,7 +386,7 @@ def q_error_distributions(Ys, X_baseline, fname=None):
 
         fp  = "Half" if row==0 else "Single"
 
-        ax2.set_title(f"Max Error distribution \n {n_values} unique values")
+        ax2.set_title(f"{n_values} unique values")
         ax2.hist(y_dist, bins=bins, orientation="horizontal")
         ax2.axhline(y=baseline, c = "tab:grey", linestyle=":")
 
